@@ -76,6 +76,44 @@ if (!list) {
 }
 return Array.from(list.querySelectorAll("list-mail-item"));
 """
+MAIL_FIND_TARGET_JS = """
+const listHost =
+  document.querySelector("#list > mail-list-container") ||
+  document.querySelector("mail-list-container");
+if (!listHost || !listHost.shadowRoot) return null;
+let listMailList = listHost.shadowRoot.querySelector(
+  "div > div.webmailer-mail-list__list-container > list-mail-list"
+);
+if (!listMailList) {
+  listMailList = listHost.shadowRoot.querySelector("list-mail-list");
+}
+if (!listMailList || !listMailList.shadowRoot) return null;
+let list = listMailList.shadowRoot.querySelector("div > div.list-mail-list");
+if (!list) {
+  list = listMailList.shadowRoot.querySelector("div.list-mail-list");
+}
+if (!list) {
+  list = listMailList.shadowRoot;
+}
+const items = Array.from(list.querySelectorAll("list-mail-item"));
+const keywords = (arguments[0] || []).map(k => (k || "").toLowerCase());
+const sender = (arguments[1] || "").toLowerCase();
+const matches = (txt) => {
+  if (!txt) return false;
+  const t = txt.toLowerCase();
+  if (sender && !t.includes(sender)) return false;
+  return keywords.some(k => k && t.includes(k));
+};
+let firstRead = null;
+for (const item of items) {
+  const cls = (item.getAttribute("class") || "").toLowerCase();
+  const text = (item.innerText || item.textContent || "").toLowerCase();
+  if (!matches(text)) continue;
+  if (cls.includes("list-mail-item--unread")) return item;
+  if (!firstRead) firstRead = item;
+}
+return firstRead;
+"""
 MAIL_DETAIL_USER_SELECTOR = (
     "#email_content > table > tbody > tr:nth-child(4) > td > table > tbody > tr > td > "
     "table > tbody > tr:nth-child(1) > td:nth-child(2) > p:nth-child(1)"
@@ -303,6 +341,16 @@ def _get_mail_items_shadow(driver):
         return items or []
     except Exception:
         return []
+
+
+def _find_target_mail_fast(driver):
+    if not _switch_to_mail_frame(driver):
+        return None
+    try:
+        keywords = [kw.lower() for kw in RESET_KEYWORDS]
+        return driver.execute_script(MAIL_FIND_TARGET_JS, keywords, SENDER_NAME.lower())
+    except Exception:
+        return None
 
 
 def _get_mail_detail_user(driver):
@@ -1318,6 +1366,8 @@ def execute_step2(driver):
 
     max_retries = 5
     mail_items = []
+    target_mail = None
+    subject_user = ""
 
     try:
         for attempt in range(max_retries):
@@ -1330,6 +1380,12 @@ def execute_step2(driver):
                 _safe_call("MailFrameReady", lambda: wait_mail_frame_ready(driver, timeout=20))
                 _safe_call("MailListReady", lambda: wait_mail_list_loaded(driver, timeout=20))
 
+            target_mail = _safe_call(
+                "FastFindMail", lambda: _find_target_mail_fast(driver), None
+            )
+            if target_mail:
+                break
+
             mail_items = _safe_call("ScanMail", lambda: scan_mail_items(driver), [])
             if mail_items:
                 break
@@ -1338,39 +1394,48 @@ def execute_step2(driver):
     except Exception as exc:
         print(f"?? [Step2] Scan error: {exc}")
 
-    if not mail_items:
+    if not target_mail and not mail_items:
         print("?? No mail list after retries.")
         return False, user_from_mail
 
     print(f"-> Filtering {len(mail_items)} mail items...")
-    target_mail = None
-    subject_user = ""
-    unread_candidates = []
-    match_candidates = []
-    for item in mail_items:
-        match = _safe_call("FilterMail", lambda: _matches_reset(item), False)
-        if not match:
-            continue
-        match_candidates.append(item)
-        if _safe_call("IsUnread", lambda: _is_unread(item), False):
-            unread_candidates.append(item)
-
-    if unread_candidates:
-        target_mail = unread_candidates[0]
-        preview = _safe_call(
-            "MailPreview", lambda: (target_mail.text or "")[:60], ""
-        )
-        print(f"? Found target mail (unread): {preview}...")
-    elif match_candidates:
-        target_mail = match_candidates[0]
-        preview = _safe_call(
-            "MailPreview", lambda: (target_mail.text or "")[:60], ""
-        )
-        print(f"? Found target mail (read): {preview}...")
     if target_mail:
+        preview = _safe_call(
+            "MailPreview", lambda: (target_mail.text or "")[:60], ""
+        )
+        unread = _safe_call("IsUnread", lambda: _is_unread(target_mail), False)
+        state = "unread" if unread else "read"
+        print(f"? Found target mail (fast {state}): {preview}...")
         subject_user = _safe_call(
             "SubjectUser", lambda: _extract_user_from_item(target_mail), ""
         )
+    else:
+        unread_candidates = []
+        match_candidates = []
+        for item in mail_items:
+            match = _safe_call("FilterMail", lambda: _matches_reset(item), False)
+            if not match:
+                continue
+            match_candidates.append(item)
+            if _safe_call("IsUnread", lambda: _is_unread(item), False):
+                unread_candidates.append(item)
+
+        if unread_candidates:
+            target_mail = unread_candidates[0]
+            preview = _safe_call(
+                "MailPreview", lambda: (target_mail.text or "")[:60], ""
+            )
+            print(f"? Found target mail (unread): {preview}...")
+        elif match_candidates:
+            target_mail = match_candidates[0]
+            preview = _safe_call(
+                "MailPreview", lambda: (target_mail.text or "")[:60], ""
+            )
+            print(f"? Found target mail (read): {preview}...")
+        if target_mail:
+            subject_user = _safe_call(
+                "SubjectUser", lambda: _extract_user_from_item(target_mail), ""
+            )
 
     if not target_mail:
         print("? No Instagram reset mail found.")
@@ -1378,7 +1443,7 @@ def execute_step2(driver):
 
     print("-> Opening mail...")
     _safe_call("OpenMail", lambda: _click_mail_item(driver, target_mail), False)
-    time.sleep(6)
+    time.sleep(1.5)
     _safe_call("MailDetailReady", lambda: wait_mail_detail_loaded(driver, timeout=20))
 
     user_from_mail = _safe_call("ExtractUser", lambda: _get_mail_detail_user(driver), "")
