@@ -116,8 +116,10 @@ class AutomationGUI(tk.Tk):
             self.tree.heading(col, text=col)
             width = 120 if col != "NOTE" else 180
             self.tree.column(col, width=width, minwidth=80, anchor=tk.W)
-        self.tree.tag_configure("success", foreground="#1b7f1b")
-        self.tree.tag_configure("error", foreground="#c62828")
+        self.tree.tag_configure(
+            "success", foreground="#1b7f1b", background="#e6f4ea"
+        )
+        self.tree.tag_configure("error", foreground="#c62828", background="#fdecea")
 
         y_scroll = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=self.tree.yview)
         x_scroll = ttk.Scrollbar(frame, orient=tk.HORIZONTAL, command=self.tree.xview)
@@ -166,8 +168,11 @@ class AutomationGUI(tk.Tk):
         ttk.Button(frame, text="Export Success", command=self.export_success).grid(
             row=0, column=8, padx=10, pady=5
         )
-        ttk.Button(frame, text="Export All", command=self.export_all).grid(
+        ttk.Button(frame, text="Export Fail", command=self.export_fail).grid(
             row=0, column=9, padx=5, pady=5
+        )
+        ttk.Button(frame, text="Export All", command=self.export_all).grid(
+            row=0, column=10, padx=5, pady=5
         )
 
     def browse_file(self):
@@ -533,6 +538,17 @@ class AutomationGUI(tk.Tk):
                 rows.append(values)
         if not rows:
             messagebox.showinfo("Export", "No success rows.")
+            return
+        self._export_rows(rows)
+
+    def export_fail(self):
+        rows = []
+        for item in self.tree.get_children():
+            values = list(self.tree.item(item, "values"))
+            if values and self._get_note_tag(values[-1]) == "error":
+                rows.append(values)
+        if not rows:
+            messagebox.showinfo("Export", "No failed rows.")
             return
         self._export_rows(rows)
 

@@ -12,7 +12,7 @@ from step4_verify import execute_step4
 # --- CONFIG FILES ---
 INPUT_FILE = "input.txt"
 OUTPUT_FILE = "output.txt"
-IG_COOKIE_PATH = r"D:\TOOLS\ChangePasswordIG\Wed New Instgram  2026 .json"
+IG_COOKIE_PATH = r"Wed New Instgram  2026 .json"
 
 
 @dataclass
