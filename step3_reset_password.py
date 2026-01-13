@@ -266,9 +266,9 @@ def execute_step3(driver, row_data_line):
     print("? Waiting 10s for Instagram to process...")
     time.sleep(10)
 
-    print("   -> Closing Instagram tab, back to GMX.")
-    driver.close()
-    driver.switch_to.window(original_window)
+    print("   -> Back to GMX (keep reset tab open).")
+    if original_window:
+        driver.switch_to.window(original_window)
     return True
 
 

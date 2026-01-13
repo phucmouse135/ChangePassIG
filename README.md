@@ -1,85 +1,85 @@
 # ChangePasswordIG
 
-Cong cu tu dong reset mat khau Instagram thong qua GMX mail.
+Automation tool to reset Instagram passwords via GMX mail.
 
-## Tong quan luong chay
-- Load cookie Instagram tu file JSON.
-- Login GMX mail.
-- Tim mail reset Instagram.
-- Mo link reset va nhap mat khau moi.
-- Xac nhan mail "password changed".
+## Flow Overview
+- Load Instagram cookies from JSON.
+- Log in to GMX mail.
+- Find Instagram reset mail.
+- Open reset link and enter new password.
+- Verify the "password changed" mail.
 
-## Setup moi truong
-Yeu cau:
+## Environment Setup
+Requirements:
 - Python 3.10+
 - Google Chrome
-- Thu vien: `selenium`, `undetected-chromedriver`
+- Packages: `selenium`, `undetected-chromedriver`
 
-Cai dat:
+Install dependencies:
 ```bash
 pip install -r requirements.txt
 ```
 
-Goi y (neu bi loi download chromedriver):
-- Thu chay lai, hoac dam bao mang on dinh.
+Tip (if chromedriver download fails):
+- Try again or ensure a stable network connection.
 
-## Cau hinh can co
-- File cookie Instagram: duong dan mac dinh trong `main.py` (bien `IG_COOKIE_PATH`).
-- File input: `input.txt` (tab-separated).
+## Required Config
+- Instagram cookie file path is set in `main.py` (`IG_COOKIE_PATH`).
+- Input file: `input.txt` (tab-separated).
 
-Mau input (8 cot):
+Input format (8 columns):
 ```
 UID add	MAIL LK IG	USER	PASS IG	2FA	PHOI GOC	PASS MAIL	MAIL KHOI PHUC
 aufiei	aufiei@gmx.de	zjsigjywkg	eaaqork1S		virtualcultural2@gmx.de	eaaqork1S	virtualcultural2@teml.net
 ```
 
-Giai thich cot:
+Column meanings:
 - `MAIL LK IG`: GMX email login
-- `PASS MAIL`: mat khau GMX (cung la mat khau IG moi)
-- `PASS IG`: neu de trong, GUI se tu gan bang `PASS MAIL`
-- `USER`: se duoc cap nhat tu subject mail neu tim duoc
+- `PASS MAIL`: GMX password (also used as the new IG password)
+- `PASS IG`: if empty, GUI will copy from `PASS MAIL`
+- `USER`: updated from mail subject if found
 
-## Chay CLI
-1. Dat du lieu vao `input.txt`.
-2. Chay:
+## Run CLI
+1. Put data into `input.txt`.
+2. Run:
 ```bash
 python main.py
 ```
-3. Ket qua ghi ra `output.txt`.
+3. Output is written to `output.txt`.
 
-## Chay GUI
+## Run GUI
 ```bash
 python gui.py
 ```
 
-### Y nghia cac thanh phan giao dien
+### GUI Components
 Input:
-- Browse/Load: chon file input, nap vao bang.
-- Paste Data: dan nhanh du lieu tab-separated.
+- Browse/Load: select input file and load table.
+- Paste Data: quick paste tab-separated data.
 
 Config:
-- Threads: so luong luong chay song song.
-- Headless: tat/bat giao dien trinh duyet.
-- Delete Selected/All: xoa dong.
+- Threads: number of parallel workers.
+- Headless: toggle browser UI.
+- Delete Selected/All: remove rows.
 
-Bang du lieu:
-- 8 cot tuong ung input, cot cuoi `NOTE` la trang thai.
+Table:
+- 8 input columns, last column `NOTE` stores status.
 
 Control:
-- START: chi chay cac dong chua "Success".
-- STOP: dung sau khi xu ly xong hang dang chay.
-- Progress/Success/Status: thong ke tien trinh.
-- Export Success/All: xuat ra file txt.
+- START: runs only rows not marked "Success".
+- STOP: stops after the current row finishes.
+- Progress/Success/Status: runtime counters.
+- Export Success/All: save to txt file.
 
-Luu y:
-- GUI se tu gan `PASS IG` = `PASS MAIL` neu `PASS IG` bi trong.
-- Khi chay lai, cac dong da "Success" se duoc bo qua.
+Notes:
+- GUI auto-fills `PASS IG` from `PASS MAIL` when empty.
+- Re-runs skip rows marked "Success".
 
-## Goi y test
-1. Thu 1 dong voi `Threads=1`, headless off.
-2. Kiem tra GMX login va mo mail ok.
-3. Khi on dinh moi tang so luong threads.
+## Test Tips
+1. Start with 1 row and `Threads=1`, headless off.
+2. Confirm GMX login and mail open works.
+3. Increase threads after a successful single run.
 
 ## Notes
-- Duong dan cookie Instagram nam trong `main.py` (`IG_COOKIE_PATH`).
-- Neu GMX UI thay doi, cap nhat selector trong `step2_get_link.py` hoac `mail_handler.py`.
+- Instagram cookie path is in `main.py` (`IG_COOKIE_PATH`).
+- If GMX UI changes, update selectors in `step2_get_link.py` or `mail_handler.py`.
