@@ -141,6 +141,59 @@ MAIL_DETAIL_RESET_XPATHS = [
     RESET_LINK_HREF_XPATH,
 ]
 
+MAIL_DETAIL_CONTENT_JS = """
+const listHost =
+  document.querySelector("#list > mail-list-container") ||
+  document.querySelector("mail-list-container");
+if (!listHost) return ["", ""];
+let detailHost = null;
+if (listHost.shadowRoot) {
+  const details = listHost.shadowRoot.querySelector("div > div.list-mail-details");
+  if (details) {
+    const slot = details.querySelector("slot");
+    if (slot && slot.assignedElements) {
+      const assigned = slot.assignedElements();
+      detailHost = assigned.find(
+        el => el.tagName && el.tagName.toLowerCase() === "webmailer-mail-detail"
+      );
+    }
+  }
+}
+if (!detailHost) {
+  detailHost = listHost.querySelector("webmailer-mail-detail");
+}
+if (!detailHost || !detailHost.shadowRoot) return ["", ""];
+const root = detailHost.shadowRoot.querySelector("div");
+if (!root) return ["", ""];
+let email = root.querySelector("#email_content");
+if (!email) {
+  const iframe =
+    root.querySelector("iframe[name='detail-body-iframe']") ||
+    root.querySelector("iframe");
+  if (iframe) {
+    try {
+      const doc = iframe.contentDocument || (iframe.contentWindow && iframe.contentWindow.document);
+      if (doc) {
+        email = doc.querySelector("#email_content") || doc.body;
+      }
+    } catch (e) {}
+  }
+}
+if (!email) return ["", ""];
+let text = "";
+try {
+  text = (email.textContent || "").replace(/\s+/g, " ").trim();
+} catch (e) {}
+let html = "";
+if (!text) {
+  try {
+    html = email.innerHTML || "";
+  } catch (e) {}
+}
+return [text, html];
+"""
+
+
 
 def _find_element_in_frames(driver, by, value, depth=0, max_depth=3):
     try:
@@ -900,34 +953,54 @@ def _click_reset_in_detail_body_iframe(driver, timeout=15):
     return clicked
 
 
-def _dump_mail_content(driver, max_chars=4000):
+def _get_mail_content_fast(driver):
+    if not _switch_to_mail_frame(driver):
+        return "", ""
     text = ""
     html_src = ""
-    frame = _get_detail_body_iframe_element(driver)
-    if frame:
+    try:
+        result = driver.execute_script(MAIL_DETAIL_CONTENT_JS)
+        if isinstance(result, (list, tuple)) and len(result) >= 2:
+            text = (result[0] or "").strip()
+            html_src = result[1] or ""
+    except Exception:
+        pass
+    finally:
         try:
-            driver.switch_to.frame(frame)
+            driver.switch_to.default_content()
+        except Exception:
+            pass
+    return text, html_src
+
+
+def _dump_mail_content(driver, max_chars=4000):
+    text, html_src = _get_mail_content_fast(driver)
+    if not text and not html_src:
+        frame = _get_detail_body_iframe_element(driver)
+        if frame:
             try:
-                email = driver.find_element(By.ID, "email_content")
-                text = email.text or ""
-                html_src = email.get_attribute("innerHTML") or ""
-            except Exception:
+                driver.switch_to.frame(frame)
                 try:
-                    text = driver.find_element(By.TAG_NAME, "body").text or ""
-                    html_src = driver.page_source or ""
+                    email = driver.find_element(By.ID, "email_content")
+                    text = email.text or ""
+                    html_src = email.get_attribute("innerHTML") or ""
+                except Exception:
+                    try:
+                        body = driver.find_element(By.TAG_NAME, "body")
+                        text = body.text or ""
+                        html_src = body.get_attribute("innerHTML") or ""
+                    except Exception:
+                        pass
+            finally:
+                try:
+                    driver.switch_to.default_content()
                 except Exception:
                     pass
-        finally:
-            try:
-                driver.switch_to.default_content()
-            except Exception:
-                pass
-    if not text:
+    if not text and not html_src:
         try:
-            text = driver.find_element(By.ID, "email_content").text or ""
-            html_src = driver.find_element(By.ID, "email_content").get_attribute(
-                "innerHTML"
-            ) or ""
+            email = driver.find_element(By.ID, "email_content")
+            text = email.text or ""
+            html_src = email.get_attribute("innerHTML") or ""
         except Exception:
             pass
     if not text and html_src:
@@ -1443,7 +1516,7 @@ def execute_step2(driver):
 
     print("-> Opening mail...")
     _safe_call("OpenMail", lambda: _click_mail_item(driver, target_mail), False)
-    time.sleep(1.5)
+    time.sleep(0.3)
     _safe_call("MailDetailReady", lambda: wait_mail_detail_loaded(driver, timeout=20))
 
     user_from_mail = _safe_call("ExtractUser", lambda: _get_mail_detail_user(driver), "")

@@ -272,9 +272,6 @@ class AutomationGUI(tk.Tk):
                 values.extend([""] * (expected_cols - len(values)))
             if len(values) > expected_cols:
                 values = values[:expected_cols]
-            pass_mail = values[6].strip() if len(values) > 6 else ""
-            if len(values) > 3 and not values[3].strip() and pass_mail:
-                values[3] = pass_mail
             note = (values[-1] or "").strip()
             if not note:
                 values[-1] = "Pending"
@@ -318,9 +315,6 @@ class AutomationGUI(tk.Tk):
             note = values[-1]
             if self._is_success_note(note):
                 continue
-            pass_mail = values[6].strip() if len(values) > 6 else ""
-            if len(values) > 3 and not values[3].strip() and pass_mail:
-                values[3] = pass_mail
             has_login = len(values) >= 6 and values[5]
             has_pass = len(values) >= 7 and values[6]
             if not has_login or not has_pass:
@@ -436,9 +430,6 @@ class AutomationGUI(tk.Tk):
                         values = list(self.tree.item(item_id, "values"))
                         if user_value:
                             values[2] = user_value
-                        if len(values) > 6 and values[6]:
-                            if len(values) > 3 and values[3] != values[6]:
-                                values[3] = values[6]
                         self.tree.item(item_id, values=values)
                     else:
                         values = list(self.tree.item(item_id, "values"))
@@ -448,6 +439,9 @@ class AutomationGUI(tk.Tk):
                     _, item_id, ok, err = msg
                     values = list(self.tree.item(item_id, "values"))
                     if ok:
+                        pass_mail = values[6].strip() if len(values) > 6 else ""
+                        if pass_mail and len(values) > 3 and not values[3].strip():
+                            values[3] = pass_mail
                         values[-1] = "Success"
                         self.success_count += 1
                     else:
