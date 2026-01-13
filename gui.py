@@ -224,7 +224,7 @@ class AutomationGUI(tk.Tk):
         def on_submit(event=None):
             content = text.get("1.0", tk.END)
             rows = self._parse_lines(content)
-            self._load_rows(rows)
+            self._append_rows(rows)
             dialog.destroy()
             return "break"
 
@@ -277,6 +277,21 @@ class AutomationGUI(tk.Tk):
                 values[-1] = "Pending"
             self.tree.insert("", tk.END, values=values)
         self._reset_stats()
+
+    def _append_rows(self, rows):
+        expected_cols = len(COLUMNS)
+        for row in rows:
+            values = list(row)
+            if len(values) < expected_cols:
+                values.extend([""] * (expected_cols - len(values)))
+            if len(values) > expected_cols:
+                values = values[:expected_cols]
+            note = (values[-1] or "").strip()
+            if not note:
+                values[-1] = "Pending"
+            self.tree.insert("", tk.END, values=values)
+        if not self.running:
+            self._reset_stats()
 
     def delete_selected(self):
         for item in self.tree.selection():

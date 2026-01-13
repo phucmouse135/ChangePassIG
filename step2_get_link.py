@@ -104,15 +104,39 @@ const matches = (txt) => {
   if (sender && !t.includes(sender)) return false;
   return keywords.some(k => k && t.includes(k));
 };
-let firstRead = null;
-for (const item of items) {
-  const cls = (item.getAttribute("class") || "").toLowerCase();
+const getTs = (item) => {
+  try {
+    const label = item.querySelector("list-date-label");
+    if (label) {
+      const raw = label.getAttribute("date-in-ms") || label.getAttribute("dateInMs") || "";
+      const value = parseInt(raw, 10);
+      if (!Number.isNaN(value)) return value;
+    }
+  } catch (e) {}
+  return 0;
+};
+let best = null;
+let bestTs = -1;
+let bestIdx = 1e9;
+for (let idx = 0; idx < items.length; idx++) {
+  const item = items[idx];
   const text = (item.innerText || item.textContent || "").toLowerCase();
   if (!matches(text)) continue;
-  if (cls.includes("list-mail-item--unread")) return item;
-  if (!firstRead) firstRead = item;
+  const ts = getTs(item);
+  if (ts > 0) {
+    if (ts > bestTs || (ts === bestTs && idx < bestIdx)) {
+      best = item;
+      bestTs = ts;
+      bestIdx = idx;
+    }
+    continue;
+  }
+  if (bestTs <= 0 && idx < bestIdx) {
+    best = item;
+    bestIdx = idx;
+  }
 }
-return firstRead;
+return best;
 """
 MAIL_DETAIL_USER_SELECTOR = (
     "#email_content > table > tbody > tr:nth-child(4) > td > table > tbody > tr > td > "
@@ -1304,6 +1328,28 @@ def _is_unread(item):
     return "list-mail-item--unread" in class_attr
 
 
+def _get_item_timestamp(item):
+    selectors = [
+        "list-date-label",
+        "div.list-mail-item__date list-date-label",
+        ".list-mail-item__date list-date-label",
+    ]
+    for sel in selectors:
+        try:
+            label = item.find_element(By.CSS_SELECTOR, sel)
+        except Exception:
+            continue
+        try:
+            raw = label.get_attribute("date-in-ms") or label.get_attribute("dateInMs")
+        except Exception:
+            raw = ""
+        try:
+            return int(raw)
+        except Exception:
+            continue
+    return 0
+
+
 def _matches_reset(item):
     sender = _safe_text(item, "div.list-mail-item__sender-trusted-text")
     subject = _safe_text(item, "div.list-mail-item__subject")
@@ -1483,28 +1529,33 @@ def execute_step2(driver):
             "SubjectUser", lambda: _extract_user_from_item(target_mail), ""
         )
     else:
-        unread_candidates = []
         match_candidates = []
-        for item in mail_items:
+        for idx, item in enumerate(mail_items):
             match = _safe_call("FilterMail", lambda: _matches_reset(item), False)
             if not match:
                 continue
-            match_candidates.append(item)
-            if _safe_call("IsUnread", lambda: _is_unread(item), False):
-                unread_candidates.append(item)
+            ts = _safe_call("MailTimestamp", lambda: _get_item_timestamp(item), 0)
+            match_candidates.append((ts, idx, item))
 
-        if unread_candidates:
-            target_mail = unread_candidates[0]
+        best_item = None
+        best_ts = -1
+        best_idx = 10**9
+        for ts, idx, item in match_candidates:
+            if ts > 0:
+                if ts > best_ts or (ts == best_ts and idx < best_idx):
+                    best_item = item
+                    best_ts = ts
+                    best_idx = idx
+            elif best_ts <= 0 and idx < best_idx:
+                best_item = item
+                best_idx = idx
+
+        if best_item:
+            target_mail = best_item
             preview = _safe_call(
                 "MailPreview", lambda: (target_mail.text or "")[:60], ""
             )
-            print(f"? Found target mail (unread): {preview}...")
-        elif match_candidates:
-            target_mail = match_candidates[0]
-            preview = _safe_call(
-                "MailPreview", lambda: (target_mail.text or "")[:60], ""
-            )
-            print(f"? Found target mail (read): {preview}...")
+            print(f"? Found target mail (newest): {preview}...")
         if target_mail:
             subject_user = _safe_call(
                 "SubjectUser", lambda: _extract_user_from_item(target_mail), ""
