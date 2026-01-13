@@ -44,6 +44,22 @@ class AutomationGUI(tk.Tk):
         self._build_ui()
         self.after(200, self._process_updates)
 
+    def _shutdown_workers(self):
+        if not self.workers:
+            return
+        self.stop_event.set()
+        for _ in self.workers:
+            try:
+                self.task_queue.put(None)
+            except Exception:
+                pass
+        for thread in self.workers:
+            try:
+                thread.join(timeout=0.2)
+            except Exception:
+                pass
+        self.workers = []
+
     def _build_ui(self):
         self._build_file_frame()
         self._build_config_frame()

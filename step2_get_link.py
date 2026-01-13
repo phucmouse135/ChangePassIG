@@ -997,8 +997,11 @@ def _get_mail_content_fast(driver):
     return text, html_src
 
 
-def _dump_mail_content(driver, max_chars=4000):
-    text, html_src = _get_mail_content_fast(driver)
+def _dump_mail_content(driver, max_chars=4000, pre_text="", pre_html=""):
+    text = pre_text or ""
+    html_src = pre_html or ""
+    if not text and not html_src:
+        text, html_src = _get_mail_content_fast(driver)
     if not text and not html_src:
         frame = _get_detail_body_iframe_element(driver)
         if frame:
@@ -1389,6 +1392,19 @@ def _extract_user_from_subject(text):
     return subject
 
 
+def _extract_user_from_mail_text(text):
+    if not text:
+        return ""
+    cleaned = text.strip()
+    match = re.match(r"(?i)^hi\s+([^\s,]+)", cleaned)
+    if match:
+        return match.group(1).strip()
+    match = re.search(r"(?i)\bhi\s+([^\s,]+)", cleaned)
+    if match:
+        return match.group(1).strip()
+    return ""
+
+
 def _extract_user_from_item(item):
     subject = _get_item_subject(item)
     user = _extract_user_from_subject(subject)
@@ -1570,17 +1586,36 @@ def execute_step2(driver):
     time.sleep(0.3)
     _safe_call("MailDetailReady", lambda: wait_mail_detail_loaded(driver, timeout=20))
 
+    mail_text = ""
+    mail_html = ""
+    content = _safe_call("MailContentFast", lambda: _get_mail_content_fast(driver), ("", ""))
+    if isinstance(content, (list, tuple)) and len(content) >= 2:
+        mail_text = content[0] or ""
+        mail_html = content[1] or ""
+
     user_from_mail = _safe_call("ExtractUser", lambda: _get_mail_detail_user(driver), "")
     if user_from_mail:
         print(f"-> Extracted IG user: {user_from_mail}")
     else:
-        if subject_user:
+        mail_user = _extract_user_from_mail_text(mail_text)
+        if mail_user:
+            user_from_mail = mail_user
+            print(f"-> IG user from mail text: {user_from_mail}")
+        elif subject_user:
             user_from_mail = subject_user
             print(f"-> IG user from subject: {user_from_mail}")
         else:
             print("-> IG user not found in mail detail.")
 
-    _safe_call("DumpMailContent", lambda: _dump_mail_content(driver), None)
+    _safe_call(
+        "DumpMailContent",
+        lambda: _dump_mail_content(driver, pre_text=mail_text, pre_html=mail_html),
+        None,
+    )
+
+    if not user_from_mail and subject_user:
+        user_from_mail = subject_user
+        print(f"-> IG user from subject: {user_from_mail}")
 
     print("-> Finding reset link...")
     mail_handle = driver.current_window_handle
