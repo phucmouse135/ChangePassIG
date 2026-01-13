@@ -1,0 +1,2 @@
+UID	EMAIL	USER	STATUS	MESSAGE
+bdhais	revolverbanking4@gmx.de	exxmxa	SUCCESS	SUCCESS
