@@ -17,6 +17,7 @@ RESET_URL_HINTS = [
     "deref-gmx.net/mail/client",
     "redirecturl=",
 ]
+WAIT_AFTER_SUBMIT_SECONDS = 7
 
 
 def _find_element_in_frames(driver, by, value, depth=0, max_depth=3):
@@ -254,17 +255,48 @@ def execute_step3(driver, row_data_line):
     try:
         pass_input.click()
         pass_input.clear()
-        pass_input.send_keys(new_password)
-        time.sleep(1)
-        pass_input.send_keys(Keys.ENTER)
+        try:
+            pass_input.send_keys(new_password)
+        except Exception:
+            driver.execute_script(
+                "arguments[0].value = arguments[1];"
+                "arguments[0].dispatchEvent(new Event('input', {bubbles: true}));"
+                "arguments[0].dispatchEvent(new Event('change', {bubbles: true}));",
+                pass_input,
+                new_password,
+            )
+        try:
+            current_val = pass_input.get_attribute("value") or ""
+        except Exception:
+            current_val = ""
+        if not current_val:
+            try:
+                driver.execute_script(
+                    "arguments[0].value = arguments[1];"
+                    "arguments[0].dispatchEvent(new Event('input', {bubbles: true}));"
+                    "arguments[0].dispatchEvent(new Event('change', {bubbles: true}));",
+                    pass_input,
+                    new_password,
+                )
+            except Exception:
+                pass
+        time.sleep(0.5)
+        try:
+            pass_input.send_keys(Keys.ENTER)
+        except Exception:
+            driver.execute_script(
+                "arguments[0].dispatchEvent(new KeyboardEvent('keydown', {key:'Enter', code:'Enter', bubbles:true}));"
+                "arguments[0].dispatchEvent(new KeyboardEvent('keyup', {key:'Enter', code:'Enter', bubbles:true}));",
+                pass_input,
+            )
     except Exception as e:
         print(f"? Error entering password: {e}")
         driver.close()
         driver.switch_to.window(original_window)
         return False
 
-    print("? Waiting 10s for Instagram to process...")
-    time.sleep(10)
+    print(f"? Waiting {WAIT_AFTER_SUBMIT_SECONDS}s after submit...")
+    time.sleep(WAIT_AFTER_SUBMIT_SECONDS)
 
     print("   -> Back to GMX (keep reset tab open).")
     if original_window:

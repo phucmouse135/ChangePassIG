@@ -44,6 +44,22 @@ class AutomationGUI(tk.Tk):
         self._build_ui()
         self.after(200, self._process_updates)
 
+    def _shutdown_workers(self):
+        if not self.workers:
+            return
+        self.stop_event.set()
+        for _ in self.workers:
+            try:
+                self.task_queue.put(None)
+            except Exception:
+                pass
+        for thread in self.workers:
+            try:
+                thread.join(timeout=0.2)
+            except Exception:
+                pass
+        self.workers = []
+
     def _build_ui(self):
         self._build_file_frame()
         self._build_config_frame()
@@ -224,7 +240,7 @@ class AutomationGUI(tk.Tk):
         def on_submit(event=None):
             content = text.get("1.0", tk.END)
             rows = self._parse_lines(content)
-            self._load_rows(rows)
+            self._append_rows(rows)
             dialog.destroy()
             return "break"
 
@@ -272,14 +288,26 @@ class AutomationGUI(tk.Tk):
                 values.extend([""] * (expected_cols - len(values)))
             if len(values) > expected_cols:
                 values = values[:expected_cols]
-            pass_mail = values[6].strip() if len(values) > 6 else ""
-            if len(values) > 3 and not values[3].strip() and pass_mail:
-                values[3] = pass_mail
             note = (values[-1] or "").strip()
             if not note:
                 values[-1] = "Pending"
             self.tree.insert("", tk.END, values=values)
         self._reset_stats()
+
+    def _append_rows(self, rows):
+        expected_cols = len(COLUMNS)
+        for row in rows:
+            values = list(row)
+            if len(values) < expected_cols:
+                values.extend([""] * (expected_cols - len(values)))
+            if len(values) > expected_cols:
+                values = values[:expected_cols]
+            note = (values[-1] or "").strip()
+            if not note:
+                values[-1] = "Pending"
+            self.tree.insert("", tk.END, values=values)
+        if not self.running:
+            self._reset_stats()
 
     def delete_selected(self):
         for item in self.tree.selection():
@@ -311,6 +339,7 @@ class AutomationGUI(tk.Tk):
         if self.running:
             return
 
+        self._shutdown_workers()
         items = self.tree.get_children()
         tasks = []
         for item in items:
@@ -318,9 +347,6 @@ class AutomationGUI(tk.Tk):
             note = values[-1]
             if self._is_success_note(note):
                 continue
-            pass_mail = values[6].strip() if len(values) > 6 else ""
-            if len(values) > 3 and not values[3].strip() and pass_mail:
-                values[3] = pass_mail
             has_login = len(values) >= 6 and values[5]
             has_pass = len(values) >= 7 and values[6]
             if not has_login or not has_pass:
@@ -436,9 +462,6 @@ class AutomationGUI(tk.Tk):
                         values = list(self.tree.item(item_id, "values"))
                         if user_value:
                             values[2] = user_value
-                        if len(values) > 6 and values[6]:
-                            if len(values) > 3 and values[3] != values[6]:
-                                values[3] = values[6]
                         self.tree.item(item_id, values=values)
                     else:
                         values = list(self.tree.item(item_id, "values"))
@@ -448,6 +471,9 @@ class AutomationGUI(tk.Tk):
                     _, item_id, ok, err = msg
                     values = list(self.tree.item(item_id, "values"))
                     if ok:
+                        pass_mail = values[6].strip() if len(values) > 6 else ""
+                        if pass_mail and len(values) > 3 and not values[3].strip():
+                            values[3] = pass_mail
                         values[-1] = "Success"
                         self.success_count += 1
                     else:
@@ -464,6 +490,7 @@ class AutomationGUI(tk.Tk):
 
         if self.running and self.done_count >= self.total_count:
             self.running = False
+            self._shutdown_workers()
             self.status_var.set("Ready")
             self.stop_event.clear()
 

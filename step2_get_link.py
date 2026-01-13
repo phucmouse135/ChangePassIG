@@ -104,15 +104,39 @@ const matches = (txt) => {
   if (sender && !t.includes(sender)) return false;
   return keywords.some(k => k && t.includes(k));
 };
-let firstRead = null;
-for (const item of items) {
-  const cls = (item.getAttribute("class") || "").toLowerCase();
+const getTs = (item) => {
+  try {
+    const label = item.querySelector("list-date-label");
+    if (label) {
+      const raw = label.getAttribute("date-in-ms") || label.getAttribute("dateInMs") || "";
+      const value = parseInt(raw, 10);
+      if (!Number.isNaN(value)) return value;
+    }
+  } catch (e) {}
+  return 0;
+};
+let best = null;
+let bestTs = -1;
+let bestIdx = 1e9;
+for (let idx = 0; idx < items.length; idx++) {
+  const item = items[idx];
   const text = (item.innerText || item.textContent || "").toLowerCase();
   if (!matches(text)) continue;
-  if (cls.includes("list-mail-item--unread")) return item;
-  if (!firstRead) firstRead = item;
+  const ts = getTs(item);
+  if (ts > 0) {
+    if (ts > bestTs || (ts === bestTs && idx < bestIdx)) {
+      best = item;
+      bestTs = ts;
+      bestIdx = idx;
+    }
+    continue;
+  }
+  if (bestTs <= 0 && idx < bestIdx) {
+    best = item;
+    bestIdx = idx;
+  }
 }
-return firstRead;
+return best;
 """
 MAIL_DETAIL_USER_SELECTOR = (
     "#email_content > table > tbody > tr:nth-child(4) > td > table > tbody > tr > td > "
@@ -140,6 +164,59 @@ MAIL_DETAIL_RESET_XPATHS = [
     RESET_LINK_TEXT_XPATH,
     RESET_LINK_HREF_XPATH,
 ]
+
+MAIL_DETAIL_CONTENT_JS = """
+const listHost =
+  document.querySelector("#list > mail-list-container") ||
+  document.querySelector("mail-list-container");
+if (!listHost) return ["", ""];
+let detailHost = null;
+if (listHost.shadowRoot) {
+  const details = listHost.shadowRoot.querySelector("div > div.list-mail-details");
+  if (details) {
+    const slot = details.querySelector("slot");
+    if (slot && slot.assignedElements) {
+      const assigned = slot.assignedElements();
+      detailHost = assigned.find(
+        el => el.tagName && el.tagName.toLowerCase() === "webmailer-mail-detail"
+      );
+    }
+  }
+}
+if (!detailHost) {
+  detailHost = listHost.querySelector("webmailer-mail-detail");
+}
+if (!detailHost || !detailHost.shadowRoot) return ["", ""];
+const root = detailHost.shadowRoot.querySelector("div");
+if (!root) return ["", ""];
+let email = root.querySelector("#email_content");
+if (!email) {
+  const iframe =
+    root.querySelector("iframe[name='detail-body-iframe']") ||
+    root.querySelector("iframe");
+  if (iframe) {
+    try {
+      const doc = iframe.contentDocument || (iframe.contentWindow && iframe.contentWindow.document);
+      if (doc) {
+        email = doc.querySelector("#email_content") || doc.body;
+      }
+    } catch (e) {}
+  }
+}
+if (!email) return ["", ""];
+let text = "";
+try {
+  text = (email.textContent || "").replace(/\s+/g, " ").trim();
+} catch (e) {}
+let html = "";
+if (!text) {
+  try {
+    html = email.innerHTML || "";
+  } catch (e) {}
+}
+return [text, html];
+"""
+
 
 
 def _find_element_in_frames(driver, by, value, depth=0, max_depth=3):
@@ -900,34 +977,57 @@ def _click_reset_in_detail_body_iframe(driver, timeout=15):
     return clicked
 
 
-def _dump_mail_content(driver, max_chars=4000):
+def _get_mail_content_fast(driver):
+    if not _switch_to_mail_frame(driver):
+        return "", ""
     text = ""
     html_src = ""
-    frame = _get_detail_body_iframe_element(driver)
-    if frame:
+    try:
+        result = driver.execute_script(MAIL_DETAIL_CONTENT_JS)
+        if isinstance(result, (list, tuple)) and len(result) >= 2:
+            text = (result[0] or "").strip()
+            html_src = result[1] or ""
+    except Exception:
+        pass
+    finally:
         try:
-            driver.switch_to.frame(frame)
+            driver.switch_to.default_content()
+        except Exception:
+            pass
+    return text, html_src
+
+
+def _dump_mail_content(driver, max_chars=4000, pre_text="", pre_html=""):
+    text = pre_text or ""
+    html_src = pre_html or ""
+    if not text and not html_src:
+        text, html_src = _get_mail_content_fast(driver)
+    if not text and not html_src:
+        frame = _get_detail_body_iframe_element(driver)
+        if frame:
             try:
-                email = driver.find_element(By.ID, "email_content")
-                text = email.text or ""
-                html_src = email.get_attribute("innerHTML") or ""
-            except Exception:
+                driver.switch_to.frame(frame)
                 try:
-                    text = driver.find_element(By.TAG_NAME, "body").text or ""
-                    html_src = driver.page_source or ""
+                    email = driver.find_element(By.ID, "email_content")
+                    text = email.text or ""
+                    html_src = email.get_attribute("innerHTML") or ""
+                except Exception:
+                    try:
+                        body = driver.find_element(By.TAG_NAME, "body")
+                        text = body.text or ""
+                        html_src = body.get_attribute("innerHTML") or ""
+                    except Exception:
+                        pass
+            finally:
+                try:
+                    driver.switch_to.default_content()
                 except Exception:
                     pass
-        finally:
-            try:
-                driver.switch_to.default_content()
-            except Exception:
-                pass
-    if not text:
+    if not text and not html_src:
         try:
-            text = driver.find_element(By.ID, "email_content").text or ""
-            html_src = driver.find_element(By.ID, "email_content").get_attribute(
-                "innerHTML"
-            ) or ""
+            email = driver.find_element(By.ID, "email_content")
+            text = email.text or ""
+            html_src = email.get_attribute("innerHTML") or ""
         except Exception:
             pass
     if not text and html_src:
@@ -1231,6 +1331,28 @@ def _is_unread(item):
     return "list-mail-item--unread" in class_attr
 
 
+def _get_item_timestamp(item):
+    selectors = [
+        "list-date-label",
+        "div.list-mail-item__date list-date-label",
+        ".list-mail-item__date list-date-label",
+    ]
+    for sel in selectors:
+        try:
+            label = item.find_element(By.CSS_SELECTOR, sel)
+        except Exception:
+            continue
+        try:
+            raw = label.get_attribute("date-in-ms") or label.get_attribute("dateInMs")
+        except Exception:
+            raw = ""
+        try:
+            return int(raw)
+        except Exception:
+            continue
+    return 0
+
+
 def _matches_reset(item):
     sender = _safe_text(item, "div.list-mail-item__sender-trusted-text")
     subject = _safe_text(item, "div.list-mail-item__subject")
@@ -1268,6 +1390,19 @@ def _extract_user_from_subject(text):
     if " " in subject:
         subject = subject.split()[0].strip()
     return subject
+
+
+def _extract_user_from_mail_text(text):
+    if not text:
+        return ""
+    cleaned = text.strip()
+    match = re.match(r"(?i)^hi\s+([^\s,]+)", cleaned)
+    if match:
+        return match.group(1).strip()
+    match = re.search(r"(?i)\bhi\s+([^\s,]+)", cleaned)
+    if match:
+        return match.group(1).strip()
+    return ""
 
 
 def _extract_user_from_item(item):
@@ -1410,28 +1545,33 @@ def execute_step2(driver):
             "SubjectUser", lambda: _extract_user_from_item(target_mail), ""
         )
     else:
-        unread_candidates = []
         match_candidates = []
-        for item in mail_items:
+        for idx, item in enumerate(mail_items):
             match = _safe_call("FilterMail", lambda: _matches_reset(item), False)
             if not match:
                 continue
-            match_candidates.append(item)
-            if _safe_call("IsUnread", lambda: _is_unread(item), False):
-                unread_candidates.append(item)
+            ts = _safe_call("MailTimestamp", lambda: _get_item_timestamp(item), 0)
+            match_candidates.append((ts, idx, item))
 
-        if unread_candidates:
-            target_mail = unread_candidates[0]
+        best_item = None
+        best_ts = -1
+        best_idx = 10**9
+        for ts, idx, item in match_candidates:
+            if ts > 0:
+                if ts > best_ts or (ts == best_ts and idx < best_idx):
+                    best_item = item
+                    best_ts = ts
+                    best_idx = idx
+            elif best_ts <= 0 and idx < best_idx:
+                best_item = item
+                best_idx = idx
+
+        if best_item:
+            target_mail = best_item
             preview = _safe_call(
                 "MailPreview", lambda: (target_mail.text or "")[:60], ""
             )
-            print(f"? Found target mail (unread): {preview}...")
-        elif match_candidates:
-            target_mail = match_candidates[0]
-            preview = _safe_call(
-                "MailPreview", lambda: (target_mail.text or "")[:60], ""
-            )
-            print(f"? Found target mail (read): {preview}...")
+            print(f"? Found target mail (newest): {preview}...")
         if target_mail:
             subject_user = _safe_call(
                 "SubjectUser", lambda: _extract_user_from_item(target_mail), ""
@@ -1443,20 +1583,39 @@ def execute_step2(driver):
 
     print("-> Opening mail...")
     _safe_call("OpenMail", lambda: _click_mail_item(driver, target_mail), False)
-    time.sleep(1.5)
+    time.sleep(0.3)
     _safe_call("MailDetailReady", lambda: wait_mail_detail_loaded(driver, timeout=20))
+
+    mail_text = ""
+    mail_html = ""
+    content = _safe_call("MailContentFast", lambda: _get_mail_content_fast(driver), ("", ""))
+    if isinstance(content, (list, tuple)) and len(content) >= 2:
+        mail_text = content[0] or ""
+        mail_html = content[1] or ""
 
     user_from_mail = _safe_call("ExtractUser", lambda: _get_mail_detail_user(driver), "")
     if user_from_mail:
         print(f"-> Extracted IG user: {user_from_mail}")
     else:
-        if subject_user:
+        mail_user = _extract_user_from_mail_text(mail_text)
+        if mail_user:
+            user_from_mail = mail_user
+            print(f"-> IG user from mail text: {user_from_mail}")
+        elif subject_user:
             user_from_mail = subject_user
             print(f"-> IG user from subject: {user_from_mail}")
         else:
             print("-> IG user not found in mail detail.")
 
-    _safe_call("DumpMailContent", lambda: _dump_mail_content(driver), None)
+    _safe_call(
+        "DumpMailContent",
+        lambda: _dump_mail_content(driver, pre_text=mail_text, pre_html=mail_html),
+        None,
+    )
+
+    if not user_from_mail and subject_user:
+        user_from_mail = subject_user
+        print(f"-> IG user from subject: {user_from_mail}")
 
     print("-> Finding reset link...")
     mail_handle = driver.current_window_handle

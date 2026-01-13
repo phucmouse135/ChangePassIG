@@ -26,6 +26,40 @@ def login_process(driver, user, password):
                 return True
             return False
 
+        def reload_if_no_password_prompt():
+            try:
+                driver.switch_to.default_content()
+            except Exception:
+                pass
+            try:
+                elems = driver.find_elements(
+                    By.XPATH,
+                    "//*[contains(normalize-space(.), 'Doch nicht Ihre E-Mail?')]",
+                )
+                if elems:
+                    driver.get("https://www.gmx.net/")
+                    time.sleep(2)
+                    return True
+            except Exception:
+                pass
+            return False
+
+        def wait_page_ready(timeout=6):
+            end_time = time.time() + timeout
+            while time.time() < end_time:
+                try:
+                    driver.switch_to.default_content()
+                except Exception:
+                    pass
+                try:
+                    state = driver.execute_script("return document.readyState")
+                except Exception:
+                    state = ""
+                if state == "complete":
+                    return True
+                time.sleep(0.2)
+            return False
+
         if abort_if_ad_popup():
             return False
         
@@ -154,60 +188,106 @@ def login_process(driver, user, password):
                 except Exception:
                     return False
 
-        current_iframe_index, user_input = fast_locate_in_frames(user_selectors, timeout=8)
-        if abort_if_ad_popup():
-            return False
-        if user_input:
-            location = "Main Content" if current_iframe_index is None else f"Iframe #{current_iframe_index + 1}"
-            print(f"   Found Login Input in {location} (fast scan)")
-        else:
-            print("? Login input not found in main/iframes.")
-            return False
+        max_password_retries = 3
+        password_input = None
+        for attempt in range(max_password_retries):
+            if attempt > 0:
+                print(
+                    f"-> Retry login to get password ({attempt + 1}/{max_password_retries})..."
+                )
 
-        # 5. ENTER USERNAME (Context is correct after scan)
-        print("-> Entering Username...")
-        if abort_if_ad_popup():
-            return False
-        filled = type_into_element(user_input, user)
-        if not filled:
-            for by_u, val_u in user_selectors:
-                if find_element_safe(driver, by_u, val_u, send_keys=user):
-                    filled = True
-                    break
+            current_iframe_index, user_input = fast_locate_in_frames(
+                user_selectors, timeout=8
+            )
+            if abort_if_ad_popup():
+                return False
+            if user_input:
+                location = (
+                    "Main Content"
+                    if current_iframe_index is None
+                    else f"Iframe #{current_iframe_index + 1}"
+                )
+                print(f"   Found Login Input in {location} (fast scan)")
+            else:
+                print("? Login input not found in main/iframes.")
+                return False
 
-        if not filled:
-            print("? Still cannot enter Username after scan.")
-            return False
+            # 5. ENTER USERNAME (Context is correct after scan)
+            print("-> Entering Username...")
+            if abort_if_ad_popup():
+                return False
+            filled = type_into_element(user_input, user)
+            if not filled:
+                for by_u, val_u in user_selectors:
+                    if find_element_safe(driver, by_u, val_u, send_keys=user):
+                        filled = True
+                        break
 
-        print(f"   Entered: {user}")
+            if not filled:
+                print("? Still cannot enter Username after scan.")
+                return False
 
-        # 6. CLICK NEXT/WEITER
-        print("-> Clicking Next/Weiter...")
-        if abort_if_ad_popup():
+            print(f"   Entered: {user}")
+
+            # 6. CLICK NEXT/WEITER
+            print("-> Clicking Next/Weiter...")
+            if abort_if_ad_popup():
+                return False
+            # Priority: data-testid -> type=submit -> id
+            current_iframe_index, next_button = fast_locate_in_frames(
+                button_selectors,
+                timeout=4,
+                prefer_iframe_index=current_iframe_index,
+            )
+            if not next_button or not click_element(next_button):
+                if not find_element_safe(
+                    driver, By.CSS_SELECTOR, "button[data-testid='login-submit']", click=True
+                ):
+                    if not find_element_safe(
+                        driver, By.CSS_SELECTOR, "button[type='submit']", click=True
+                    ):
+                        if not find_element_safe(
+                            driver, By.ID, "login-submit", click=True
+                        ):
+                            print("? Next button not found.")
+                            # return False # Try continuing
+
+            wait_page_ready(timeout=6)
+
+            # 7. WAIT FOR PASSWORD INPUT
+            if abort_if_ad_popup():
+                return False
+            # Priority: data-testid -> id -> name -> xpath
+            current_iframe_index, password_input = fast_locate_in_frames(
+                password_selectors,
+                timeout=10,
+                prefer_iframe_index=current_iframe_index,
+            )
+            if password_input:
+                break
+
+            if reload_if_no_password_prompt():
+                print(
+                    "?? Missing password field; reloading due to 'Doch nicht Ihre E-Mail?'."
+                )
+            else:
+                print("?? Missing password field; reloading GMX to retry.")
+                driver.get("https://www.gmx.net/")
+                time.sleep(2)
+            find_element_safe(
+                driver, By.ID, "onetrust-accept-btn-handler", timeout=3, click=True
+            )
+            if abort_if_ad_popup():
+                return False
+
+        if not password_input:
+            print("? Password input not found after retries.")
             return False
-        # Priority: data-testid -> type=submit -> id
-        current_iframe_index, next_button = fast_locate_in_frames(
-            button_selectors,
-            timeout=4,
-            prefer_iframe_index=current_iframe_index
-        )
-        if not next_button or not click_element(next_button):
-            if not find_element_safe(driver, By.CSS_SELECTOR, "button[data-testid='login-submit']", click=True):
-                if not find_element_safe(driver, By.CSS_SELECTOR, "button[type='submit']", click=True):
-                    if not find_element_safe(driver, By.ID, "login-submit", click=True):
-                        print("? Next button not found.")
-                        # return False # Try continuing
 
         # 7. ENTER PASSWORD
         print("-> Entering Password...")
         if abort_if_ad_popup():
             return False
-        # Priority: data-testid -> id -> name -> xpath
-        current_iframe_index, password_input = fast_locate_in_frames(
-            password_selectors,
-            timeout=10,
-            prefer_iframe_index=current_iframe_index
-        )
         if not password_input or not type_into_element(password_input, password):
             if not find_element_safe(driver, By.CSS_SELECTOR, "input[data-testid='input-password']", timeout=10, send_keys=password):
                 if not find_element_safe(driver, By.ID, "password", send_keys=password):
