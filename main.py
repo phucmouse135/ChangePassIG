@@ -4,7 +4,6 @@ import time
 from dataclasses import dataclass
 
 from gmx_core import get_driver
-from step1_login import login_process
 from step2_get_link import execute_step2
 from step3_reset_password import execute_step3
 from step4_verify import execute_step4
@@ -150,19 +149,9 @@ def process_line(driver, line):
         return False, f"Cookie load failed: {err}", current_user
     _clear_reset_cache(driver)
 
-    ok, _, err = _retry_step(
-        "Step 1 Login",
-        lambda: login_process(driver, email, password),
-        retries=3,
-        delay=3,
-        success_check=lambda r: r is True,
-    )
-    if not ok:
-        return False, f"Step 1 Fail: {err or 'Login failed'}", current_user
-
     def _step2_call():
         _clear_reset_cache(driver)
-        return execute_step2(driver)
+        return execute_step2(driver, email=email, password=password)
 
     ok, step2_result, err = _retry_step(
         "Step 2 Read mail",
@@ -193,7 +182,7 @@ def process_line(driver, line):
 
     ok, _, err = _retry_step(
         "Step 4 Verify mail",
-        lambda: execute_step4(driver),
+        lambda: execute_step4(driver, email=email, password=password),
         retries=3,
         delay=4,
         success_check=lambda r: r is True,
@@ -235,22 +224,13 @@ def process_account(account, headless=False, status_cb=None):
         _clear_reset_cache(driver)
 
         if status_cb:
-            status_cb("Step1: login GMX")
-        ok, _, err = _retry_step(
-            "Step 1 Login",
-            lambda: login_process(driver, account.mail_login, account.mail_pass),
-            retries=3,
-            delay=3,
-            success_check=lambda r: r is True,
-        )
-        if not ok:
-            raise RuntimeError(f"Login failed: {err}")
-
-        if status_cb:
-            status_cb("Step2: read mail")
+            status_cb("Step2: read mail (IMAP)")
         ok, step2_result, err = _retry_step(
             "Step 2 Read mail",
-            lambda: (_clear_reset_cache(driver) or execute_step2(driver)),
+            lambda: (
+                _clear_reset_cache(driver)
+                or execute_step2(driver, email=account.mail_login, password=account.mail_pass)
+            ),
             retries=3,
             delay=4,
             success_check=lambda r: isinstance(r, tuple) and r[0],
@@ -280,10 +260,12 @@ def process_account(account, headless=False, status_cb=None):
             raise RuntimeError(f"Reset password submit failed: {err}")
 
         if status_cb:
-            status_cb("Step4: verify mail")
+            status_cb("Step4: verify mail (IMAP)")
         ok, _, err = _retry_step(
             "Step 4 Verify mail",
-            lambda: execute_step4(driver),
+            lambda: execute_step4(
+                driver, email=account.mail_login, password=account.mail_pass
+            ),
             retries=3,
             delay=4,
             success_check=lambda r: r is True,

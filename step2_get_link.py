@@ -1,6 +1,10 @@
 import time
 import re
 import html
+import imaplib
+import email
+from email.header import decode_header
+from email.utils import parseaddr
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 
@@ -16,6 +20,14 @@ MAIL_MAX_RETRIES = 4 if FAST_MODE else 5
 MAIL_RETRY_SLEEP = 1.5 if FAST_MODE else 3
 MAIL_REFRESH_EVERY = 2 if FAST_MODE else 1
 DEBUG_DUMP_MAIL = False if FAST_MODE else True
+IMAP_ENABLED = True
+IMAP_ONLY = True
+IMAP_HOST_DEFAULT = "imap.gmx.net"
+IMAP_PORT = 993
+IMAP_FOLDER = "INBOX"
+IMAP_POLL_TIMEOUT = 18 if FAST_MODE else 25
+IMAP_POLL_INTERVAL = 1.0
+IMAP_MAX_FETCH = 15
 
 RESET_KEYWORDS = [
     "reset your password",
@@ -370,6 +382,179 @@ def _open_reset_link_in_new_tab(driver, url, timeout=10):
         _cache_reset_target(driver, handle=new_handle, url=url)
         return new_handle
     return ""
+
+
+def _decode_mime_words(value):
+    if not value:
+        return ""
+    decoded = ""
+    for part, encoding in decode_header(value):
+        if isinstance(part, bytes):
+            try:
+                decoded += part.decode(encoding or "utf-8", errors="replace")
+            except Exception:
+                decoded += part.decode("utf-8", errors="replace")
+        else:
+            decoded += part
+    return decoded
+
+
+def _decode_payload(payload, charset):
+    if payload is None:
+        return ""
+    try:
+        return payload.decode(charset or "utf-8", errors="replace")
+    except Exception:
+        return payload.decode("utf-8", errors="replace")
+
+
+def _html_to_text(raw_html):
+    if not raw_html:
+        return ""
+    text = re.sub(r"<[^>]+>", " ", raw_html)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _imap_host_for_email(email_addr):
+    if not email_addr or "@" not in email_addr:
+        return IMAP_HOST_DEFAULT
+    domain = email_addr.split("@", 1)[1].lower().strip()
+    if domain.endswith("gmx.com"):
+        return "imap.gmx.com"
+    if domain.endswith("gmx.net") or domain.endswith("gmx.de"):
+        return "imap.gmx.net"
+    if domain.endswith("mail.com"):
+        return "imap.mail.com"
+    return IMAP_HOST_DEFAULT
+
+
+def _imap_collect_message_parts(message):
+    html_parts = []
+    text_parts = []
+    if message.is_multipart():
+        for part in message.walk():
+            if part.get_content_maintype() == "multipart":
+                continue
+            disposition = (part.get("Content-Disposition") or "").lower()
+            if "attachment" in disposition:
+                continue
+            content_type = part.get_content_type()
+            payload = part.get_payload(decode=True)
+            if payload is None:
+                continue
+            text = _decode_payload(payload, part.get_content_charset())
+            if content_type == "text/html":
+                html_parts.append(text)
+            elif content_type == "text/plain":
+                text_parts.append(text)
+    else:
+        payload = message.get_payload(decode=True)
+        if payload:
+            text = _decode_payload(payload, message.get_content_charset())
+            if message.get_content_type() == "text/html":
+                html_parts.append(text)
+            else:
+                text_parts.append(text)
+    return "\n".join(html_parts), "\n".join(text_parts)
+
+
+def _imap_fetch_message(imap_conn, msg_id):
+    try:
+        status, data = imap_conn.fetch(msg_id, "(BODY.PEEK[])")
+    except Exception:
+        return None
+    if status != "OK" or not data:
+        return None
+    for item in data:
+        if isinstance(item, tuple) and item[1]:
+            try:
+                return email.message_from_bytes(item[1])
+            except Exception:
+                return None
+    return None
+
+
+def _imap_search_ids(imap_conn, unseen_first=True):
+    criteria_sets = [("UNSEEN",)] if unseen_first else []
+    criteria_sets.append(("ALL",))
+    for criteria in criteria_sets:
+        try:
+            status, data = imap_conn.search(None, *criteria)
+        except Exception:
+            continue
+        if status != "OK" or not data:
+            continue
+        raw = data[0] or b""
+        ids = raw.split()
+        if ids:
+            return ids
+    return []
+
+
+def _imap_find_reset_link(email_addr, password, timeout=IMAP_POLL_TIMEOUT):
+    if not email_addr or not password:
+        return "", "", ""
+    host = _imap_host_for_email(email_addr)
+    try:
+        imap_conn = imaplib.IMAP4_SSL(host, IMAP_PORT)
+    except Exception as exc:
+        print(f"?? [IMAP] Connect failed: {exc}")
+        return "", "", ""
+
+    try:
+        imap_conn.login(email_addr, password)
+    except Exception as exc:
+        print(f"?? [IMAP] Login failed: {exc}")
+        try:
+            imap_conn.logout()
+        except Exception:
+            pass
+        return "", "", ""
+
+    try:
+        status, _ = imap_conn.select(IMAP_FOLDER)
+        if status != "OK":
+            print("?? [IMAP] Select inbox failed.")
+            return "", "", ""
+
+        end_time = time.time() + timeout
+        while True:
+            ids = _imap_search_ids(imap_conn, unseen_first=True)
+            if ids:
+                ids = ids[-IMAP_MAX_FETCH:]
+            for msg_id in reversed(ids):
+                message = _imap_fetch_message(imap_conn, msg_id)
+                if not message:
+                    continue
+                subject = _decode_mime_words(message.get("Subject", "")).strip()
+                from_addr = parseaddr(message.get("From", ""))[1].lower()
+                subject_low = subject.lower()
+                header_blob = f"{from_addr} {subject_low}"
+                if "instagram" not in header_blob and not any(
+                    kw in subject_low for kw in RESET_KEYWORDS
+                ):
+                    continue
+                html_part, text_part = _imap_collect_message_parts(message)
+                link = ""
+                if html_part:
+                    link = _extract_reset_link_from_html(html_part)
+                if not link and text_part:
+                    link = _extract_reset_link_from_html(text_part)
+                if not link and html_part and text_part:
+                    link = _extract_reset_link_from_html(html_part + "\n" + text_part)
+                if link:
+                    text_out = text_part or _html_to_text(html_part)
+                    return link, text_out, subject
+
+            if time.time() >= end_time:
+                break
+            time.sleep(IMAP_POLL_INTERVAL)
+    finally:
+        try:
+            imap_conn.logout()
+        except Exception:
+            pass
+    return "", "", ""
 
 
 def _safe_call(label, func, default=None):
@@ -1514,10 +1699,40 @@ def _click_mail_item(driver, item):
     return clicked
 
 
-def execute_step2(driver):
+def execute_step2(driver, email="", password=""):
     print("--- [STEP 2] FIND MAIL AND CLICK RESET LINK ---")
 
     user_from_mail = ""
+    subject_user = ""
+
+    if IMAP_ONLY and not IMAP_ENABLED:
+        print("?? IMAP-only mode but IMAP is disabled.")
+        return False, user_from_mail
+
+    if IMAP_ENABLED and email and password:
+        print("-> IMAP: polling reset mail...")
+        link, imap_text, imap_subject = _safe_call(
+            "ImapResetLink", lambda: _imap_find_reset_link(email, password), ("", "", "")
+        )
+        if link:
+            if imap_text:
+                user_from_mail = _extract_user_from_mail_text(imap_text)
+            if not user_from_mail and imap_subject:
+                subject_user = _extract_user_from_subject(imap_subject)
+                user_from_mail = subject_user
+            print(f"? Reset link via IMAP: {link[:120]}...")
+            new_handle = _open_reset_link_in_new_tab(driver, link, timeout=10)
+            if not new_handle:
+                _cache_reset_target(driver, url=link)
+            return True, user_from_mail
+        if IMAP_ONLY:
+            print("? IMAP-only mode: reset link not found.")
+            return False, user_from_mail
+    elif IMAP_ENABLED and IMAP_ONLY:
+        print("-> IMAP: skipped (missing credentials).")
+        return False, user_from_mail
+    elif IMAP_ENABLED:
+        print("-> IMAP: skipped (missing credentials).")
 
     _safe_call("PageReady", lambda: wait_page_ready(driver, timeout=MAIL_WAIT_PAGE_TIMEOUT))
     _safe_call("MailFrameReady", lambda: wait_mail_frame_ready(driver, timeout=MAIL_WAIT_FRAME_TIMEOUT))
@@ -1526,7 +1741,6 @@ def execute_step2(driver):
     max_retries = MAIL_MAX_RETRIES
     mail_items = []
     target_mail = None
-    subject_user = ""
 
     try:
         for attempt in range(max_retries):
@@ -1784,7 +1998,6 @@ def execute_step2(driver):
 
 
 if __name__ == "__main__":
-    from step1_login import login_process
     from gmx_core import get_driver
 
     TEST_EMAIL = "revolverbanking4@gmx.de"
@@ -1792,11 +2005,8 @@ if __name__ == "__main__":
 
     driver = get_driver(headless=False)
     try:
-        if login_process(driver, TEST_EMAIL, TEST_PASS):
-            ok, user = execute_step2(driver)
-            print(f"Step2 result: {ok}, user={user}")
-        else:
-            print("Step 1 Fail")
+        ok, user = execute_step2(driver, email=TEST_EMAIL, password=TEST_PASS)
+        print(f"Step2 result: {ok}, user={user}")
     except Exception as e:
         print(f"Main Error: {e}")
         time.sleep(60)
