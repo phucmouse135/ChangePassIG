@@ -339,6 +339,7 @@ class AutomationGUI(tk.Tk):
         if self.running:
             return
 
+        self._shutdown_workers()
         items = self.tree.get_children()
         tasks = []
         for item in items:
@@ -489,6 +490,7 @@ class AutomationGUI(tk.Tk):
 
         if self.running and self.done_count >= self.total_count:
             self.running = False
+            self._shutdown_workers()
             self.status_var.set("Ready")
             self.stop_event.clear()
 
