@@ -5,6 +5,18 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 
 # --- CONFIG ---
+FAST_MODE = True
+MAIL_WAIT_PAGE_TIMEOUT = 12 if FAST_MODE else 20
+MAIL_WAIT_FRAME_TIMEOUT = 12 if FAST_MODE else 20
+MAIL_WAIT_LIST_TIMEOUT = 12 if FAST_MODE else 20
+MAIL_WAIT_DETAIL_TIMEOUT = 10 if FAST_MODE else 20
+MAIL_FAST_POLL_TIMEOUT = 3 if FAST_MODE else 0
+MAIL_FAST_POLL_INTERVAL = 0.3 if FAST_MODE else 0.5
+MAIL_MAX_RETRIES = 4 if FAST_MODE else 5
+MAIL_RETRY_SLEEP = 1.5 if FAST_MODE else 3
+MAIL_REFRESH_EVERY = 2 if FAST_MODE else 1
+DEBUG_DUMP_MAIL = False if FAST_MODE else True
+
 RESET_KEYWORDS = [
     "reset your password",
     "easy to get back on instagram",
@@ -428,6 +440,18 @@ def _find_target_mail_fast(driver):
         return driver.execute_script(MAIL_FIND_TARGET_JS, keywords, SENDER_NAME.lower())
     except Exception:
         return None
+
+
+def _poll_for_target_mail(driver, timeout=MAIL_FAST_POLL_TIMEOUT, interval=MAIL_FAST_POLL_INTERVAL):
+    if not timeout or timeout <= 0:
+        return _find_target_mail_fast(driver)
+    end_time = time.time() + timeout
+    while time.time() < end_time:
+        target = _find_target_mail_fast(driver)
+        if target:
+            return target
+        time.sleep(interval)
+    return None
 
 
 def _get_mail_detail_user(driver):
@@ -1495,11 +1519,11 @@ def execute_step2(driver):
 
     user_from_mail = ""
 
-    _safe_call("PageReady", lambda: wait_page_ready(driver, timeout=20))
-    _safe_call("MailFrameReady", lambda: wait_mail_frame_ready(driver, timeout=20))
-    _safe_call("MailListReady", lambda: wait_mail_list_loaded(driver, timeout=20))
+    _safe_call("PageReady", lambda: wait_page_ready(driver, timeout=MAIL_WAIT_PAGE_TIMEOUT))
+    _safe_call("MailFrameReady", lambda: wait_mail_frame_ready(driver, timeout=MAIL_WAIT_FRAME_TIMEOUT))
+    _safe_call("MailListReady", lambda: wait_mail_list_loaded(driver, timeout=MAIL_WAIT_LIST_TIMEOUT))
 
-    max_retries = 5
+    max_retries = MAIL_MAX_RETRIES
     mail_items = []
     target_mail = None
     subject_user = ""
@@ -1508,15 +1532,26 @@ def execute_step2(driver):
         for attempt in range(max_retries):
             print(f"-> [Attempt {attempt+1}/{max_retries}] Scanning mail list...")
 
-            if attempt > 0:
+            attempt_num = attempt + 1
+            if attempt_num > 1 and (
+                MAIL_REFRESH_EVERY <= 1 or attempt_num % MAIL_REFRESH_EVERY == 0
+            ):
                 print("   Refreshing page...")
                 _safe_call("Refresh", driver.refresh)
-                _safe_call("PageReady", lambda: wait_page_ready(driver, timeout=20))
-                _safe_call("MailFrameReady", lambda: wait_mail_frame_ready(driver, timeout=20))
-                _safe_call("MailListReady", lambda: wait_mail_list_loaded(driver, timeout=20))
+                _safe_call(
+                    "PageReady", lambda: wait_page_ready(driver, timeout=MAIL_WAIT_PAGE_TIMEOUT)
+                )
+                _safe_call(
+                    "MailFrameReady",
+                    lambda: wait_mail_frame_ready(driver, timeout=MAIL_WAIT_FRAME_TIMEOUT),
+                )
+                _safe_call(
+                    "MailListReady",
+                    lambda: wait_mail_list_loaded(driver, timeout=MAIL_WAIT_LIST_TIMEOUT),
+                )
 
             target_mail = _safe_call(
-                "FastFindMail", lambda: _find_target_mail_fast(driver), None
+                "FastFindMail", lambda: _poll_for_target_mail(driver), None
             )
             if target_mail:
                 break
@@ -1524,8 +1559,8 @@ def execute_step2(driver):
             mail_items = _safe_call("ScanMail", lambda: scan_mail_items(driver), [])
             if mail_items:
                 break
-            print("   No mail items yet, retry in 3s...")
-            time.sleep(3)
+            print("   No mail items yet, retry soon...")
+            time.sleep(MAIL_RETRY_SLEEP)
     except Exception as exc:
         print(f"?? [Step2] Scan error: {exc}")
 
@@ -1584,7 +1619,9 @@ def execute_step2(driver):
     print("-> Opening mail...")
     _safe_call("OpenMail", lambda: _click_mail_item(driver, target_mail), False)
     time.sleep(0.3)
-    _safe_call("MailDetailReady", lambda: wait_mail_detail_loaded(driver, timeout=20))
+    _safe_call(
+        "MailDetailReady", lambda: wait_mail_detail_loaded(driver, timeout=MAIL_WAIT_DETAIL_TIMEOUT)
+    )
 
     mail_text = ""
     mail_html = ""
@@ -1607,11 +1644,12 @@ def execute_step2(driver):
         else:
             print("-> IG user not found in mail detail.")
 
-    _safe_call(
-        "DumpMailContent",
-        lambda: _dump_mail_content(driver, pre_text=mail_text, pre_html=mail_html),
-        None,
-    )
+    if DEBUG_DUMP_MAIL:
+        _safe_call(
+            "DumpMailContent",
+            lambda: _dump_mail_content(driver, pre_text=mail_text, pre_html=mail_html),
+            None,
+        )
 
     if not user_from_mail and subject_user:
         user_from_mail = subject_user
