@@ -116,6 +116,8 @@ class AutomationGUI(tk.Tk):
             self.tree.heading(col, text=col)
             width = 120 if col != "NOTE" else 180
             self.tree.column(col, width=width, minwidth=80, anchor=tk.W)
+        self.tree.tag_configure("success", foreground="#1b7f1b")
+        self.tree.tag_configure("error", foreground="#c62828")
 
         y_scroll = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=self.tree.yview)
         x_scroll = ttk.Scrollbar(frame, orient=tk.HORIZONTAL, command=self.tree.xview)
@@ -291,7 +293,10 @@ class AutomationGUI(tk.Tk):
             note = (values[-1] or "").strip()
             if not note:
                 values[-1] = "Pending"
-            self.tree.insert("", tk.END, values=values)
+                note = values[-1]
+            tag = self._get_note_tag(note)
+            tags = (tag,) if tag else ()
+            self.tree.insert("", tk.END, values=values, tags=tags)
         self._reset_stats()
 
     def _append_rows(self, rows):
@@ -305,7 +310,10 @@ class AutomationGUI(tk.Tk):
             note = (values[-1] or "").strip()
             if not note:
                 values[-1] = "Pending"
-            self.tree.insert("", tk.END, values=values)
+                note = values[-1]
+            tag = self._get_note_tag(note)
+            tags = (tag,) if tag else ()
+            self.tree.insert("", tk.END, values=values, tags=tags)
         if not self.running:
             self._reset_stats()
 
@@ -331,6 +339,23 @@ class AutomationGUI(tk.Tk):
             return False
         return note.strip().lower() == "success"
 
+    def _get_note_tag(self, note):
+        if not isinstance(note, str):
+            return ""
+        clean = note.strip().lower()
+        if clean == "success":
+            return "success"
+        if clean.startswith("error"):
+            return "error"
+        return ""
+
+    def _apply_note_tag(self, item_id, note):
+        tag = self._get_note_tag(note)
+        if tag:
+            self.tree.item(item_id, tags=(tag,))
+        else:
+            self.tree.item(item_id, tags=())
+
     def _show_context_menu(self, event):
         if self.tree.identify_row(event.y):
             self.menu.tk_popup(event.x_root, event.y_root)
@@ -352,9 +377,11 @@ class AutomationGUI(tk.Tk):
             if not has_login or not has_pass:
                 values[-1] = "Error: missing mail login/pass"
                 self.tree.item(item, values=values)
+                self._apply_note_tag(item, values[-1])
                 continue
             values[-1] = "Pending"
             self.tree.item(item, values=values)
+            self._apply_note_tag(item, values[-1])
             tasks.append((item, values))
 
         if not tasks:
@@ -467,6 +494,7 @@ class AutomationGUI(tk.Tk):
                         values = list(self.tree.item(item_id, "values"))
                         values[-1] = status
                         self.tree.item(item_id, values=values)
+                        self._apply_note_tag(item_id, status)
                 elif msg[0] == "done":
                     _, item_id, ok, err = msg
                     values = list(self.tree.item(item_id, "values"))
@@ -480,6 +508,7 @@ class AutomationGUI(tk.Tk):
                         short_err = err[:120] if err else "Error"
                         values[-1] = f"Error: {short_err}"
                     self.tree.item(item_id, values=values)
+                    self._apply_note_tag(item_id, values[-1])
                     self.done_count += 1
                     self.progress_var.set(f"{self.done_count}/{self.total_count}")
                     self.success_var.set(str(self.success_count))
