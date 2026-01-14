@@ -171,8 +171,11 @@ class AutomationGUI(tk.Tk):
         ttk.Button(frame, text="Export Fail", command=self.export_fail).grid(
             row=0, column=9, padx=5, pady=5
         )
-        ttk.Button(frame, text="Export All", command=self.export_all).grid(
+        ttk.Button(frame, text="Export No Success", command=self.export_no_success).grid(
             row=0, column=10, padx=5, pady=5
+        )
+        ttk.Button(frame, text="Export All", command=self.export_all).grid(
+            row=0, column=11, padx=5, pady=5
         )
 
     def browse_file(self):
@@ -541,7 +544,9 @@ class AutomationGUI(tk.Tk):
             return
         self._export_rows(rows)
 
+
     def export_fail(self):
+        # Chỉ xuất các dòng có trạng thái Fail (Error)
         rows = []
         for item in self.tree.get_children():
             values = list(self.tree.item(item, "values"))
@@ -549,6 +554,18 @@ class AutomationGUI(tk.Tk):
                 rows.append(values)
         if not rows:
             messagebox.showinfo("Export", "No failed rows.")
+            return
+        self._export_rows(rows)
+
+    def export_no_success(self):
+        # Xuất các dòng không phải Success (bao gồm cả Fail và Pending)
+        rows = []
+        for item in self.tree.get_children():
+            values = list(self.tree.item(item, "values"))
+            if values and not self._is_success_note(values[-1]):
+                rows.append(values)
+        if not rows:
+            messagebox.showinfo("Export", "No 'No Success' rows.")
             return
         self._export_rows(rows)
 
