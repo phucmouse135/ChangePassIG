@@ -30,11 +30,20 @@ IMAP_POLL_INTERVAL = 1.0
 IMAP_MAX_FETCH = 15
 
 RESET_KEYWORDS = [
+    # English
     "reset your password",
     "easy to get back on instagram",
     "trouble logging into instagram",
     "we've made it easy",
     "get back on instagram",
+    # Vietnamese
+    "đặt lại mật khẩu",
+    "khôi phục mật khẩu",
+    "lấy lại mật khẩu instagram",
+    "đặt lại mật khẩu instagram",
+    "khó đăng nhập vào instagram",
+    "chúng tôi đã giúp bạn dễ dàng hơn",
+    "lấy lại quyền truy cập instagram",
 ]
 SENDER_NAME = "instagram"
 RESET_LINK_XPATH = (

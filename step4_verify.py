@@ -9,9 +9,17 @@ from selenium.webdriver.support.ui import WebDriverWait
 
 # --- CONFIG ---
 CONFIRM_KEYWORDS = [
+    # English
     "password has been changed",
     "password changed",
     "your instagram password has been changed",
+    # Vietnamese
+    "mật khẩu đã được thay đổi",
+    "bạn vừa thay đổi mật khẩu",
+    "mật khẩu instagram của bạn đã được thay đổi",
+    "bạn đã thay đổi mật khẩu instagram",
+    "bạn vừa đổi mật khẩu instagram",
+    "bạn vừa đổi mật khẩu",
 ]
 SENDER_NAME = "instagram"
 MAIL_FRAME_ID = "thirdPartyFrame_mail"
@@ -213,14 +221,18 @@ def _imap_search_ids(imap_conn, unseen_first=True):
     return []
 
 
-def _text_contains_confirm(text):
+def _text_contains_confirm(text, ig_user=None):
     if not text:
         return False
     text_low = text.lower()
+    if ig_user:
+        ig_user_low = ig_user.strip().lower()
+        if ig_user_low and ig_user_low not in text_low:
+            return False
     return any(kw in text_low for kw in CONFIRM_KEYWORDS)
 
 
-def _imap_find_confirm(email_addr, password, timeout=IMAP_POLL_TIMEOUT):
+def _imap_find_confirm(email_addr, password, ig_user=None, timeout=IMAP_POLL_TIMEOUT):
     if not email_addr or not password:
         return False
     host = _imap_host_for_email(email_addr)
@@ -267,7 +279,7 @@ def _imap_find_confirm(email_addr, password, timeout=IMAP_POLL_TIMEOUT):
                     and SENDER_NAME not in body_low
                 ):
                     continue
-                if _text_contains_confirm(subject_low) or _text_contains_confirm(body_low):
+                if _text_contains_confirm(subject_low, ig_user) or _text_contains_confirm(body_low, ig_user):
                     return True
             if time.time() >= end_time:
                 break
@@ -292,7 +304,7 @@ def _is_unread(item):
     return "list-mail-item--unread" in class_attr
 
 
-def _matches_confirm(item):
+def _matches_confirm(item, ig_user=None):
     sender = _safe_text(item, "div.list-mail-item__sender-trusted-text")
     subject = _safe_text(item, "div.list-mail-item__subject")
     full_text = (sender + " " + subject).strip()
@@ -304,6 +316,10 @@ def _matches_confirm(item):
             except Exception:
                 full_text = ""
         if SENDER_NAME not in full_text:
+            return False
+    if ig_user:
+        ig_user_low = ig_user.strip().lower()
+        if ig_user_low and ig_user_low not in full_text:
             return False
     keywords = [kw.lower() for kw in CONFIRM_KEYWORDS]
     return any(kw in full_text for kw in keywords)
@@ -408,7 +424,7 @@ def scan_mail_items(driver):
     return _find_elements_in_frames(driver, By.TAG_NAME, "list-mail-item")
 
 
-def execute_step4(driver, email="", password=""):
+def execute_step4(driver, email="", password="", ig_user=None):
     print("--- [STEP 4] VERIFY CONFIRM MAIL ---")
 
     if IMAP_ONLY and not IMAP_ENABLED:
@@ -418,7 +434,7 @@ def execute_step4(driver, email="", password=""):
     if IMAP_ENABLED and email and password:
         print("-> IMAP: polling confirm mail...")
         found = _safe_call(
-            "ImapConfirm", lambda: _imap_find_confirm(email, password), False
+            "ImapConfirm", lambda: _imap_find_confirm(email, password, ig_user), False
         )
         if found:
             print("? [SUCCESS] Confirm mail found via IMAP.")
@@ -452,7 +468,7 @@ def execute_step4(driver, email="", password=""):
         found = False
         for item in mail_items:
             try:
-                if _is_unread(item) and _matches_confirm(item):
+                if _is_unread(item) and _matches_confirm(item, ig_user):
                     print(f"? [SUCCESS] Confirm mail found: {(item.text or '')[:60]}...")
                     found = True
                     break

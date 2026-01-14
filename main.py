@@ -182,7 +182,7 @@ def process_line(driver, line):
 
     ok, _, err = _retry_step(
         "Step 4 Verify mail",
-        lambda: execute_step4(driver, email=email, password=password),
+        lambda: execute_step4(driver, email=email, password=password, ig_user=ig_user),
         retries=3,
         delay=4,
         success_check=lambda r: r is True,
