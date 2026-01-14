@@ -75,6 +75,19 @@ Notes:
 - GUI auto-fills `PASS IG` from `PASS MAIL` when empty.
 - Re-runs skip rows marked "Success".
 
+## Status and Error Codes
+CLI output (`output.txt` -> STATUS column):
+- `SUCCESS`: all steps completed.
+- `FAIL`: a step failed; check MESSAGE for details (e.g. `Cookie load failed`, `Step 1 Fail`, `Step 2 Fail`, `Step 3 Fail`, `Step 4 Fail`).
+- `CRASH`: unhandled exception; check MESSAGE.
+
+GUI NOTE column:
+- `Success`: completed.
+- `Pending`, `Running`: in progress.
+- `Error: missing mail login/pass`: input row is missing required fields.
+- `Error: <message>`: runtime error; usually matches the CLI MESSAGE.
+- `Step1: open Instagram`, `Step1: login GMX`, `Step2: read mail`, `Step3: reset password`, `Step4: verify mail`: progress markers.
+
 ## Test Tips
 1. Start with 1 row and `Threads=1`, headless off.
 2. Confirm GMX login and mail open works.

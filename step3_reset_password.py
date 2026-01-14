@@ -17,7 +17,32 @@ RESET_URL_HINTS = [
     "deref-gmx.net/mail/client",
     "redirecturl=",
 ]
+SUBMIT_KEYWORDS = [
+    "reset",
+    "continue",
+    "submit",
+    "save",
+    "change password",
+    "change",
+    "next",
+]
+SUBMIT_NEGATIVE_KEYWORDS = ["cancel", "back"]
 WAIT_AFTER_SUBMIT_SECONDS = 7
+EXPIRED_LINK_MARKERS = [
+    "page isn't available",
+    "page isnt available",
+    "this page isn't available",
+    "sorry, this page isn't available",
+    "the link may be broken",
+    "link may be broken",
+    "link has expired",
+    "link is invalid",
+    "invalid link",
+]
+
+
+class ResetLinkExpiredError(RuntimeError):
+    pass
 
 
 def _find_element_in_frames(driver, by, value, depth=0, max_depth=3):
@@ -102,6 +127,28 @@ def _wait_for_url(driver, timeout=10):
             return url
         time.sleep(0.3)
     return url
+
+
+def _page_has_expired_marker(driver):
+    try:
+        source = driver.page_source or ""
+    except Exception:
+        source = ""
+    try:
+        title = driver.title or ""
+    except Exception:
+        title = ""
+    blob = f"{title}\n{source}".lower()
+    return any(marker in blob for marker in EXPIRED_LINK_MARKERS)
+
+
+def _wait_for_expired_page(driver, timeout=6):
+    end_time = time.time() + timeout
+    while time.time() < end_time:
+        if _page_has_expired_marker(driver):
+            return True
+        time.sleep(0.3)
+    return False
 
 
 def _wait_for_new_window(driver, previous_handles, timeout=10):
@@ -203,6 +250,156 @@ def find_elements_any_frame(driver, by, value):
     return _find_elements_in_frames(driver, by, value)
 
 
+def _normalize_text(text):
+    if not text:
+        return ""
+    return " ".join(text.replace("\xa0", " ").split()).strip().lower()
+
+
+def _button_text(el):
+    try:
+        text = el.text or ""
+    except Exception:
+        text = ""
+    if not text:
+        try:
+            text = el.get_attribute("value") or ""
+        except Exception:
+            text = ""
+    if not text:
+        try:
+            text = el.get_attribute("aria-label") or ""
+        except Exception:
+            text = ""
+    return _normalize_text(text)
+
+
+def _click_element(driver, element):
+    if not element:
+        return False
+    try:
+        driver.execute_script(
+            "arguments[0].scrollIntoView({block: 'center', inline: 'center'});",
+            element,
+        )
+    except Exception:
+        pass
+    try:
+        element.click()
+        return True
+    except Exception:
+        try:
+            driver.execute_script("arguments[0].click();", element)
+            return True
+        except Exception:
+            return False
+
+
+def _find_best_submit_button(driver, pass_input):
+    form = None
+    try:
+        form = pass_input.find_element(By.XPATH, "./ancestor::form[1]")
+    except Exception:
+        form = None
+
+    candidates = []
+    if form:
+        try:
+            candidates = form.find_elements(
+                By.CSS_SELECTOR, "button, input[type='submit'], input[type='button']"
+            )
+        except Exception:
+            candidates = []
+    if not candidates:
+        try:
+            candidates = driver.find_elements(
+                By.CSS_SELECTOR, "button, input[type='submit'], input[type='button']"
+            )
+        except Exception:
+            candidates = []
+
+    best = None
+    best_score = -1
+    for el in candidates:
+        text = _button_text(el)
+        if text and any(bad in text for bad in SUBMIT_NEGATIVE_KEYWORDS):
+            continue
+        score = 0
+        try:
+            el_type = (el.get_attribute("type") or "").lower()
+        except Exception:
+            el_type = ""
+        if el_type == "submit":
+            score += 3
+        if text:
+            score += 1
+        if any(k in text for k in SUBMIT_KEYWORDS):
+            score += 5
+        if score > best_score:
+            best = el
+            best_score = score
+    return best, form
+
+
+def _submit_password_form(driver, pass_input):
+    submit_btn, form = _find_best_submit_button(driver, pass_input)
+    if submit_btn and _click_element(driver, submit_btn):
+        return True
+    try:
+        pass_input.send_keys(Keys.ENTER)
+        return True
+    except Exception:
+        try:
+            driver.execute_script(
+                "arguments[0].dispatchEvent(new KeyboardEvent('keydown', {key:'Enter', code:'Enter', bubbles:true}));"
+                "arguments[0].dispatchEvent(new KeyboardEvent('keyup', {key:'Enter', code:'Enter', bubbles:true}));",
+                pass_input,
+            )
+            return True
+        except Exception:
+            pass
+    if form:
+        try:
+            driver.execute_script("arguments[0].submit();", form)
+            return True
+        except Exception:
+            pass
+    return False
+
+
+def _fill_confirm_password(driver, pass_input, new_password):
+    try:
+        form = pass_input.find_element(By.XPATH, "./ancestor::form[1]")
+    except Exception:
+        form = None
+    if not form:
+        return
+    try:
+        inputs = form.find_elements(By.CSS_SELECTOR, "input[type='password']")
+    except Exception:
+        inputs = []
+    for el in inputs:
+        if el == pass_input:
+            continue
+        try:
+            el.clear()
+        except Exception:
+            pass
+        try:
+            el.send_keys(new_password)
+        except Exception:
+            try:
+                driver.execute_script(
+                    "arguments[0].value = arguments[1];"
+                    "arguments[0].dispatchEvent(new Event('input', {bubbles: true}));"
+                    "arguments[0].dispatchEvent(new Event('change', {bubbles: true}));",
+                    el,
+                    new_password,
+                )
+            except Exception:
+                pass
+
+
 def execute_step3(driver, row_data_line):
     print("--- [STEP 3] ENTER NEW PASSWORD ---")
 
@@ -280,15 +477,10 @@ def execute_step3(driver, row_data_line):
                 )
             except Exception:
                 pass
-        time.sleep(0.5)
-        try:
-            pass_input.send_keys(Keys.ENTER)
-        except Exception:
-            driver.execute_script(
-                "arguments[0].dispatchEvent(new KeyboardEvent('keydown', {key:'Enter', code:'Enter', bubbles:true}));"
-                "arguments[0].dispatchEvent(new KeyboardEvent('keyup', {key:'Enter', code:'Enter', bubbles:true}));",
-                pass_input,
-            )
+        _fill_confirm_password(driver, pass_input, new_password)
+        time.sleep(0.4)
+        if not _submit_password_form(driver, pass_input):
+            print("? Warning: submit action not executed.")
     except Exception as e:
         print(f"? Error entering password: {e}")
         driver.close()
