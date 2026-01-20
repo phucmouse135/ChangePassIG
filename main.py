@@ -205,7 +205,15 @@ def _build_line_from_account(account):
         "",
     ]
     return "\t".join(parts)
-
+def append_log(filepath, content):
+    """Ghi log và ép hệ điều hành lưu ngay lập tức xuống ổ cứng."""
+    try:
+        with open(filepath, "a", encoding="utf-8") as f:
+            f.write(content + "\n")
+            f.flush()      # Đẩy từ bộ đệm Python xuống bộ đệm OS
+            os.fsync(f.fileno()) # Đẩy từ bộ đệm OS xuống đĩa cứng vật lý (Quan trọng)
+    except Exception as e:
+        print(f"[LOG ERROR] Không thể ghi file: {e}")
 
 def process_account(account, headless=False, status_cb=None):
     driver = get_driver(headless=headless)
@@ -232,7 +240,7 @@ def process_account(account, headless=False, status_cb=None):
                 or execute_step2(driver, email=account.mail_login, password=account.mail_pass)
             ),
             retries=3,
-            delay=4,
+            delay=2,
             success_check=lambda r: isinstance(r, tuple) and r[0],
         )
         if ok and step2_result:
@@ -253,7 +261,7 @@ def process_account(account, headless=False, status_cb=None):
             "Step 3 Reset password",
             lambda: execute_step3(driver, line),
             retries=3,
-            delay=4,
+            delay=3,
             success_check=lambda r: r is True,
         )
         if not ok:

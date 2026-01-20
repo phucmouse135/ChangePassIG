@@ -2,6 +2,7 @@ import queue
 import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
+import os
 
 from main import Account, process_account
 
@@ -17,7 +18,7 @@ COLUMNS = [
     "MAIL KHOI PHUC",
     "NOTE",
 ]
-
+_FILE_LOCK = threading.Lock()
 
 class AutomationGUI(tk.Tk):
     def __init__(self):
@@ -43,6 +44,26 @@ class AutomationGUI(tk.Tk):
 
         self._build_ui()
         self.after(200, self._process_updates)
+        
+    def _save_live_result(self, values, status, message):
+        """Ghi kết quả ngay lập tức vào file live_output.txt"""
+        try:
+            # Tạo nội dung dòng log: UID | MAIL | PASS | STATUS | MSG
+            # Tùy chỉnh các cột theo ý bạn dựa vào biến values
+            uid = values[0]
+            mail = values[5]
+            password = values[6]
+            # status và message là kết quả vừa chạy xong
+            
+            line_content = f"{uid}\t{mail}\t{password}\t{status}\t{message}"
+            
+            with _FILE_LOCK: # Khóa file để các luồng không ghi đè nhau
+                with open("output.txt", "a", encoding="utf-8") as f:
+                    f.write(line_content + "\n")
+                    f.flush()
+                    os.fsync(f.fileno()) # Ép ghi xuống ổ cứng ngay
+        except Exception as e:
+            print(f"Lỗi ghi live output: {e}")
 
     def _shutdown_workers(self):
         if not self.workers:
@@ -480,6 +501,8 @@ class AutomationGUI(tk.Tk):
                     self.update_queue.put(("status", item_id, result))
             except Exception as exc:
                 err = str(exc)
+            msg_log = err if err else "OK"
+            self._save_live_result(values, result, msg_log)
 
             self.update_queue.put(("done", item_id, ok, err))
             self.task_queue.task_done()

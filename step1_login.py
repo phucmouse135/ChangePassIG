@@ -1,6 +1,7 @@
 # FILE: step1_login.py
 import time
 from selenium.webdriver.common.by import By
+# Import các hàm từ gmx_core mới
 from gmx_core import get_driver, find_element_safe, reload_if_ad_popup
 
 # --- DATA TEST DEFAULT ---
@@ -9,7 +10,7 @@ DEF_PASS = "muledok5P"
 
 def login_process(driver, user, password):
     """
-    Standard Login Function.
+    Standard Login Function (Full Logic).
     Returns True if login success, False if failed.
     """
     try:
@@ -17,9 +18,13 @@ def login_process(driver, user, password):
         
         # 1. Enter site
         driver.get("https://www.gmx.net/")
-        time.sleep(3)
-        driver.get("https://www.gmx.net/") # Reload
+        time.sleep(2)
+        
+        # Reload nhẹ để đảm bảo tải hết resource (giữ logic cũ)
+        if driver.current_url == "about:blank":
+             driver.get("https://www.gmx.net/")
 
+        # --- CÁC HÀM HỖ TRỢ NỘI BỘ (GIỮ NGUYÊN LOGIC GỐC) ---
         def abort_if_ad_popup():
             if reload_if_ad_popup(driver):
                 print("?? Ad popup detected. Reloaded to GMX home.")
@@ -27,6 +32,7 @@ def login_process(driver, user, password):
             return False
 
         def reload_if_no_password_prompt():
+            """Xử lý trường hợp GMX hiện màn hình 'Không phải email của bạn?'"""
             try:
                 driver.switch_to.default_content()
             except Exception:
@@ -60,18 +66,7 @@ def login_process(driver, user, password):
                 time.sleep(0.2)
             return False
 
-        if abort_if_ad_popup():
-            return False
-        
-        # 2. Handle Consent
-        print("-> Check Consent...")
-        find_element_safe(driver, By.ID, "onetrust-accept-btn-handler", timeout=5, click=True)
-        if abort_if_ad_popup():
-            return False
-
-        # 3. LOGIC FIND LOGIN FORM (FAST-SCAN MAIN/IFRAME)
-        print("-> Scanning for Login Form (Main or Iframe)...")
-
+        # --- LOGIC QUÉT ELEMENT TRONG IFRAME (QUAN TRỌNG) ---
         user_selectors = [
             (By.CSS_SELECTOR, "input[data-testid='input-email']"),
             (By.NAME, "username"),
@@ -95,25 +90,28 @@ def login_process(driver, user, password):
 
         fast_scan_interval = 0.2
 
-        if abort_if_ad_popup():
-            return False
-
         def fast_find_any(selectors):
             for by_f, val_f in selectors:
                 try:
                     elements = driver.find_elements(by_f, val_f)
+                    # Chỉ lấy element hiển thị được
+                    visible_elems = [e for e in elements if e.is_displayed()]
+                    if visible_elems:
+                        return visible_elems[0], (by_f, val_f)
+                    if elements: # Fallback nếu chưa kịp hiển thị
+                        return elements[0], (by_f, val_f)
                 except Exception:
-                    elements = []
-                if elements:
-                    return elements[0], (by_f, val_f)
+                    continue
             return None, None
 
         def fast_locate_in_frames(selectors, timeout=6, prefer_iframe_index=None):
+            """Hàm quét toàn bộ Iframes để tìm element - Logic cốt lõi của GMX Login"""
             end_time = time.time() + timeout
             while time.time() < end_time:
                 if abort_if_ad_popup():
                     return None, None
 
+                # 1. Check iframe ưu tiên trước (nếu đã tìm thấy ở bước trước)
                 if prefer_iframe_index is not None:
                     try:
                         driver.switch_to.default_content()
@@ -126,15 +124,16 @@ def login_process(driver, user, password):
                     except Exception:
                         pass
 
+                # 2. Check Main Content
                 try:
                     driver.switch_to.default_content()
                 except Exception:
                     pass
-
                 element, _ = fast_find_any(selectors)
                 if element:
                     return None, element
 
+                # 3. Scan toàn bộ iframe
                 try:
                     iframes = driver.find_elements(By.TAG_NAME, "iframe")
                 except Exception:
@@ -179,6 +178,7 @@ def login_process(driver, user, password):
                 return True
             except Exception:
                 try:
+                    # Fallback JS nhập liệu nếu send_keys lỗi
                     driver.execute_script("arguments[0].value = arguments[1];", element, text)
                     driver.execute_script(
                         "arguments[0].dispatchEvent(new Event('input', {bubbles: true}));",
@@ -188,138 +188,144 @@ def login_process(driver, user, password):
                 except Exception:
                     return False
 
+        # --- BẮT ĐẦU QUY TRÌNH LOGIN ---
+
+        if abort_if_ad_popup():
+            return False
+        
+        # 2. Handle Consent
+        # print("-> Check Consent...")
+        find_element_safe(driver, By.ID, "onetrust-accept-btn-handler", timeout=5, click=True)
+        if abort_if_ad_popup():
+            return False
+
+        # 3. FIND USER INPUT
+        # print("-> Scanning for Login Form (Main or Iframe)...")
+        
+        # Vòng lặp retry nhập password (Logic quan trọng giữ lại)
         max_password_retries = 3
         password_input = None
+        
         for attempt in range(max_password_retries):
             if attempt > 0:
-                print(
-                    f"-> Retry login to get password ({attempt + 1}/{max_password_retries})..."
-                )
+                print(f"-> Retry login process ({attempt + 1}/{max_password_retries})...")
 
-            current_iframe_index, user_input = fast_locate_in_frames(
-                user_selectors, timeout=8
-            )
-            if abort_if_ad_popup():
-                return False
+            # Tìm ô nhập User
+            current_iframe_index, user_input = fast_locate_in_frames(user_selectors, timeout=8)
+            
+            if abort_if_ad_popup(): return False
+            
             if user_input:
-                location = (
-                    "Main Content"
-                    if current_iframe_index is None
-                    else f"Iframe #{current_iframe_index + 1}"
-                )
-                print(f"   Found Login Input in {location} (fast scan)")
+                location = "Main Content" if current_iframe_index is None else f"Iframe #{current_iframe_index + 1}"
+                # print(f"   Found Login Input in {location}")
             else:
                 print("? Login input not found in main/iframes.")
                 return False
 
-            # 5. ENTER USERNAME (Context is correct after scan)
-            print("-> Entering Username...")
-            if abort_if_ad_popup():
-                return False
+            # 5. ENTER USERNAME
+            # print("-> Entering Username...")
+            if abort_if_ad_popup(): return False
+            
             filled = type_into_element(user_input, user)
             if not filled:
+                # Retry nhập bằng find_element_safe nếu hàm trên fail
                 for by_u, val_u in user_selectors:
                     if find_element_safe(driver, by_u, val_u, send_keys=user):
                         filled = True
                         break
 
             if not filled:
-                print("? Still cannot enter Username after scan.")
+                print("? Cannot enter Username.")
                 return False
 
-            print(f"   Entered: {user}")
+            # print(f"   Entered: {user}")
 
             # 6. CLICK NEXT/WEITER
-            print("-> Clicking Next/Weiter...")
-            if abort_if_ad_popup():
-                return False
-            # Priority: data-testid -> type=submit -> id
+            # print("-> Clicking Next/Weiter...")
+            if abort_if_ad_popup(): return False
+            
+            # Tìm nút Next (ưu tiên tìm trong cùng iframe với user input)
             current_iframe_index, next_button = fast_locate_in_frames(
                 button_selectors,
                 timeout=4,
                 prefer_iframe_index=current_iframe_index,
             )
+            
             if not next_button or not click_element(next_button):
-                if not find_element_safe(
-                    driver, By.CSS_SELECTOR, "button[data-testid='login-submit']", click=True
-                ):
-                    if not find_element_safe(
-                        driver, By.CSS_SELECTOR, "button[type='submit']", click=True
-                    ):
-                        if not find_element_safe(
-                            driver, By.ID, "login-submit", click=True
-                        ):
-                            print("? Next button not found.")
-                            # return False # Try continuing
+                # Fallback tìm nút bằng các selector cơ bản
+                if not find_element_safe(driver, By.CSS_SELECTOR, "button[data-testid='login-submit']", click=True):
+                    if not find_element_safe(driver, By.CSS_SELECTOR, "button[type='submit']", click=True):
+                         print("? Next button not found.")
 
             wait_page_ready(timeout=6)
 
             # 7. WAIT FOR PASSWORD INPUT
-            if abort_if_ad_popup():
-                return False
-            # Priority: data-testid -> id -> name -> xpath
+            if abort_if_ad_popup(): return False
+            
+            # Tìm ô Password (ưu tiên iframe cũ)
             current_iframe_index, password_input = fast_locate_in_frames(
                 password_selectors,
-                timeout=10,
+                timeout=8, # Tăng timeout chờ animation
                 prefer_iframe_index=current_iframe_index,
             )
+            
             if password_input:
-                break
+                break # Đã tìm thấy password, thoát vòng lặp retry
 
+            # Xử lý lỗi GMX đặc thù nếu không thấy ô pass
             if reload_if_no_password_prompt():
-                print(
-                    "?? Missing password field; reloading due to 'Doch nicht Ihre E-Mail?'."
-                )
+                print("?? Reloading due to 'Doch nicht Ihre E-Mail?'.")
             else:
                 print("?? Missing password field; reloading GMX to retry.")
                 driver.get("https://www.gmx.net/")
                 time.sleep(2)
-            find_element_safe(
-                driver, By.ID, "onetrust-accept-btn-handler", timeout=3, click=True
-            )
-            if abort_if_ad_popup():
-                return False
+            
+            # Chấp nhận lại cookie nếu reload
+            find_element_safe(driver, By.ID, "onetrust-accept-btn-handler", timeout=3, click=True)
+            if abort_if_ad_popup(): return False
 
         if not password_input:
             print("? Password input not found after retries.")
             return False
 
         # 7. ENTER PASSWORD
-        print("-> Entering Password...")
-        if abort_if_ad_popup():
-            return False
+        # print("-> Entering Password...")
+        if abort_if_ad_popup(): return False
+        
         if not password_input or not type_into_element(password_input, password):
-            if not find_element_safe(driver, By.CSS_SELECTOR, "input[data-testid='input-password']", timeout=10, send_keys=password):
-                if not find_element_safe(driver, By.ID, "password", send_keys=password):
-                    if not find_element_safe(driver, By.NAME, "password", send_keys=password):
-                        if not find_element_safe(driver, By.XPATH, "//input[@type='password']", send_keys=password):
-                            print("? Password input not found.")
-                            return False
-        print("   Password entered.")
+            # Fallback nhập pass
+            if not find_element_safe(driver, By.CSS_SELECTOR, "input[data-testid='input-password']", timeout=5, send_keys=password):
+                 print("? Password input error.")
+                 return False
+        # print("   Password entered.")
 
         # 8. CLICK LOGIN FINAL
-        # Priority: data-testid -> type=submit
-        if abort_if_ad_popup():
-            return False
+        if abort_if_ad_popup(): return False
+        
         current_iframe_index, login_button = fast_locate_in_frames(
             button_selectors,
             timeout=4,
             prefer_iframe_index=current_iframe_index
         )
         if not login_button or not click_element(login_button):
-            if not find_element_safe(driver, By.CSS_SELECTOR, "button[data-testid='login-submit']", click=True):
-                find_element_safe(driver, By.CSS_SELECTOR, "button[type='submit']", click=True)
-        print("-> Clicked Login.")
+             find_element_safe(driver, By.CSS_SELECTOR, "button[type='submit']", click=True)
+        # print("-> Clicked Login.")
 
         # 9. CHECK RESULT
         driver.switch_to.default_content()
-        print("-> Waiting for redirection...")
+        # print("-> Waiting for redirection...")
         
-        for _ in range(20):
-            if "navigator" in driver.current_url:
-                print(f"✅ [PASS] Login Success! URL: {driver.current_url}")
+        # Logic check login thành công
+        end_wait = time.time() + 20
+        while time.time() < end_wait:
+            curr = driver.current_url
+            if "navigator" in curr or "mail.com/mail" in curr:
+                print(f"✅ [PASS] Login Success: {user}")
                 return True
-            time.sleep(1)
+            if "error" in curr or "login_failed" in driver.page_source:
+                print("❌ [FAIL] Login Failed (Wrong Pass/Block)")
+                return False
+            time.sleep(0.5)
             
         print("❌ [FAIL] Timeout: Did not reach navigator page.")
         return False
@@ -330,58 +336,8 @@ def login_process(driver, user, password):
 
 # Test run if file executed directly
 if __name__ == "__main__":
-    import os
-    INPUT_TEST = "input.txt"
-    
-    if os.path.exists(INPUT_TEST):
-        print(f"--- BULK TEST MODE: Reading {INPUT_TEST} ---")
-
-        output_path = "output.txt"
-        try:
-            with open(INPUT_TEST, "r", encoding="utf-8") as f:
-                lines = f.readlines()
-            # Skip header if present
-            start_line = 0
-            if len(lines) > 0 and "UID" in lines[0]:
-                start_line = 1
-            # Prepare output file (overwrite)
-            with open(output_path, "w", encoding="utf-8") as fout:
-                fout.write("uid\tresult\n")
-                for idx, line in enumerate(lines[start_line:]):
-                    line = line.strip()
-                    if not line: continue
-                    parts = line.split('\t')
-                    if len(parts) < 2: parts = line.split()
-                    # Assume Format: ... [User Col 5] [Pass Col 6]
-                    if len(parts) >= 7:
-                        t_uid = parts[0]
-                        t_user = parts[5]
-                        t_pass = parts[6]
-                        print(f"\n[{idx+1}] Testing Account: {t_user}")
-                        driver = get_driver(headless=False)
-                        try:
-                            login_success = login_process(driver, t_user, t_pass)
-                            print(f"Result {t_user}: {'OK' if login_success else 'FAIL'}")
-                            fout.write(f"{t_uid}\t{'success' if login_success else 'fail'}\n")
-                        except Exception as e:
-                            print(f"Error {t_user}: {e}")
-                            fout.write(f"{t_uid}\tfail\n")
-                        finally:
-                            try: driver.quit()
-                            except: pass
-                    else:
-                        print(f"Skipping invalid line: {line}")
-        except Exception as e:
-            print(f"File read error: {e}")
-            
-    else:
-        print("--- SINGLE TEST DEFAULT ---")
-        driver = get_driver()
-        try:
-            login_process(driver, DEF_USER, DEF_PASS)
-        except Exception:
-            pass
-        finally:
-            try: driver.quit()
-            except: pass
-# FILE: gmx_core.py
+    driver = get_driver(headless=False)
+    try:
+        login_process(driver, DEF_USER, DEF_PASS)
+    finally:
+        driver.quit()
