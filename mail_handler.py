@@ -340,7 +340,7 @@ def _get_code_from_mail_attempt(driver, email, password):
                 
                 # Check opened
                 print("   [Mail] Waiting for mail content...")
-                time.sleep(8) 
+                time.sleep(6)
 
                 # --- NEW LOGIC: RECURSIVE SEARCH ---
                 def _attempt_extract_in_current_frame(drv):
@@ -441,8 +441,8 @@ def get_code_from_mail(driver, email, password):
             print(f"   [Mail] Exception at attempt {attempt}: {e}")
         
         if attempt < 3:
-            print("   [Mail] Failed or error. Waiting 5s before retry...")
-            time.sleep(5)
+            print("   [Mail] Failed or error. Waiting 3s before retry...")
+            time.sleep(3)
     
     print("   [Mail] => Failed after 3 attempts. No code retrieved.")
     return None
@@ -779,7 +779,7 @@ def run_instagram_reset_flow(driver, new_password, mail_wait_timeout=30):
     if not set_instagram_password_from_reset(driver, new_password):
         raise RuntimeError("Password input not found on reset page.")
 
-    time.sleep(10)
+    time.sleep(8)
 
     if new_handle and new_handle != mail_handle:
         try:
