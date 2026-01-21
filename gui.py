@@ -491,6 +491,7 @@ class AutomationGUI(tk.Tk):
             )
 
             ok = False
+            result = None
             err = ""
             try:
                 result = process_account(

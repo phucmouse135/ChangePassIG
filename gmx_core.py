@@ -14,14 +14,47 @@ TIMEOUT_MAX = 15
 SLEEP_INTERVAL = 1 
 PROXY_HOST = "127.0.0.1"
 
-# Lock & Cache cho Driver Installer (Singleton Pattern từ config_utils)
+# --- WINDOW MANAGER CONFIG ---
+# Cấu hình lưới hiển thị (Cho màn hình 1920x1080)
+GRID_COLS = 5        # 5 cột
+GRID_ROWS = 2        # 2 hàng (Tổng 10 slot)
+WIN_WIDTH = 380      # Chiều rộng cửa sổ (khoảng 1920/5)
+WIN_HEIGHT = 500     # Chiều cao cửa sổ (khoảng 1080/2 trừ taskbar)
+X_OFFSET = 0         # Lùi vào từ mép trái
+Y_OFFSET = 0         # Lùi vào từ mép trên
+
+# Lock & Cache
 _DRIVER_LOCK = threading.Lock()
 _INSTALLER_LOCK = threading.Lock()
 _CACHED_DRIVER_PATH = None
 
+# Quản lý Slot vị trí (Thread-safe)
+class WindowPositionManager:
+    def __init__(self, max_slots=10):
+        self.slots = [False] * max_slots # False = Trống, True = Đang dùng
+        self.lock = threading.Lock()
+
+    def acquire(self):
+        """Lấy một vị trí trống (index)"""
+        with self.lock:
+            for i, occupied in enumerate(self.slots):
+                if not occupied:
+                    self.slots[i] = True
+                    return i
+            return 0 # Nếu full thì xếp chồng lên slot 0
+
+    def release(self, index):
+        """Trả lại vị trí khi driver tắt"""
+        with self.lock:
+            if 0 <= index < len(self.slots):
+                self.slots[index] = False
+
+# Khởi tạo Global Manager
+_WIN_MANAGER = WindowPositionManager(max_slots=GRID_COLS * GRID_ROWS)
+
 # --- CÁC HÀM HỖ TRỢ DỌN DẸP ---
 def kill_orphaned_chrome():
-    """Dọn dẹp các process Chrome bị treo để tránh lỗi 'cannot connect'."""
+    """Dọn dẹp các process Chrome bị treo."""
     try:
         if os.name == 'nt': # Windows
             subprocess.run("taskkill /f /im chromedriver.exe /T", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -31,7 +64,7 @@ def kill_orphaned_chrome():
         pass
 
 def _install_driver_once():
-    """Chỉ install driver 1 lần duy nhất trong suốt vòng đời app."""
+    """Chỉ install driver 1 lần duy nhất."""
     global _CACHED_DRIVER_PATH
     if _CACHED_DRIVER_PATH:
         return _CACHED_DRIVER_PATH
@@ -46,16 +79,11 @@ def _install_driver_once():
                 raise e
     return _CACHED_DRIVER_PATH
 
-# --- HÀM KHỞI TẠO DRIVER (TỐI ƯU HIỆU SUẤT) ---
+# --- HÀM KHỞI TẠO DRIVER (TỐI ƯU HIỆU SUẤT + GRID LAYOUT) ---
 def get_driver(headless=False, proxy_port=None):
     """
-    Initialize browser with Standard Selenium + Anti-Detect + Performance Tuning.
-    Kết hợp logic của gmx_core cũ và config_utils.
+    Initialize browser with Standard Selenium + Grid Layout Positioning.
     """
-    
-    # 1. Dọn dẹp process cũ (chỉ chạy nếu cần thiết, hoặc bỏ qua nếu chạy đa luồng liên tục)
-    # kill_orphaned_chrome() 
-
     options = Options()
     
     # --- Proxy ---
@@ -67,59 +95,64 @@ def get_driver(headless=False, proxy_port=None):
     user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     options.add_argument(f'--user-agent={user_agent}')
 
-    # --- Cấu hình Headless & GPU ---
+    # --- WINDOW POSITIONING LOGIC ---
     if headless:
         options.add_argument('--headless=new')
-    
-    options.add_argument("--window-size=1280,720") # Giảm size để nhẹ hơn
+        options.add_argument("--window-size=1280,720")
+    else:
+        # 1. Lấy slot trống
+        slot_idx = _WIN_MANAGER.acquire()
+        
+        # 2. Tính toán tọa độ X, Y
+        # col = index % số cột
+        # row = index // số cột
+        col_idx = slot_idx % GRID_COLS
+        row_idx = slot_idx // GRID_COLS
+        
+        pos_x = X_OFFSET + (col_idx * WIN_WIDTH)
+        pos_y = Y_OFFSET + (row_idx * WIN_HEIGHT)
+        
+        # 3. Set tham số chrome
+        options.add_argument(f"--window-size={WIN_WIDTH},{WIN_HEIGHT}")
+        options.add_argument(f"--window-position={pos_x},{pos_y}")
+        
+        # print(f"[CORE] Window Slot {slot_idx}: Position ({pos_x}, {pos_y})")
+
+    # --- Config Khác ---
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
     options.add_argument("--disable-software-rasterizer")
     
-    # --- PERFORMANCE OPTIMIZATIONS (Từ config_utils) ---
     # Tắt load ảnh để chạy nhanh
     options.add_argument("--blink-settings=imagesEnabled=false") 
-    
-    # Tắt cache ổ cứng (Disk I/O optimization)
-    options.add_argument("--disable-application-cache")
-    options.add_argument("--disk-cache-size=0") 
-    
-    # Tắt extension và infobars
     options.add_argument("--disable-extensions")
     options.add_argument("--disable-infobars")
     options.add_argument("--disable-notifications")
     options.add_argument("--disable-popup-blocking")
     
-    # Page Load Strategy: 'eager' (DOMContentLoaded là chạy, không chờ ảnh/css)
     options.page_load_strategy = 'eager'
 
-    # --- ANTI-DETECT ---
+    # Anti-detect cơ bản
     options.add_argument("--disable-blink-features=AutomationControlled") 
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_experimental_option('useAutomationExtension', False)
 
-    # --- Profile Temp ---
     profile_dir = tempfile.mkdtemp()
     options.add_argument(f"--user-data-dir={profile_dir}")
     
     prefs = {
-        "profile.managed_default_content_settings.images": 2, # Block image
+        "profile.managed_default_content_settings.images": 2,
         "credentials_enable_service": False,
         "profile.password_manager_enabled": False
     }
     options.add_experimental_option("prefs", prefs)
     
-    # print(f"[CORE] Opening Chrome (Headless: {headless})...")
-    
     try:
-        # Sử dụng Cached Driver Path
         driver_path = _install_driver_once()
         service = Service(driver_path)
-        
         driver = webdriver.Chrome(service=service, options=options)
         
-        # Set timeouts
         driver.set_page_load_timeout(60)
         driver.set_script_timeout(60)
 
@@ -132,65 +165,63 @@ def get_driver(headless=False, proxy_port=None):
             """
         })
         
+        # --- MONKEY PATCH DRIVER.QUIT ---
+        # Để tự động trả lại slot vị trí khi driver tắt
+        if not headless:
+            original_quit = driver.quit
+            def quit_wrapper():
+                try:
+                    _WIN_MANAGER.release(slot_idx)
+                except: pass
+                return original_quit()
+            driver.quit = quit_wrapper
+        
         return driver
     except Exception as e:
+        # Nếu lỗi khởi tạo, nhớ trả lại slot
+        if not headless:
+            try: _WIN_MANAGER.release(slot_idx)
+            except: pass
         print(f"[CORE] Lỗi khởi tạo Driver: {e}")
         raise e
 
 # --- CÁC HÀM LOGIC NGHIỆP VỤ (GIỮ NGUYÊN) ---
 
 def find_element_safe(driver, by, value, timeout=TIMEOUT_MAX, click=False, send_keys=None):
-    """
-    Hàm tìm kiếm an toàn có tích hợp check popup GMX.
-    """
     end_time = time.time() + timeout
     while time.time() < end_time:
-        # Check Popup quảng cáo
         if reload_if_ad_popup(driver):
-             # Nếu vừa reload, reset vòng lặp để tìm lại
              pass
-        
         try:
             element = driver.find_element(by, value)
-            
             if click:
                 try:
                     element.click()
                 except Exception:
                     driver.execute_script("arguments[0].click();", element)
                 return True
-            
             if send_keys:
                 element.clear()
                 element.send_keys(send_keys)
                 return True
-            
             return element 
         except Exception:
             time.sleep(SLEEP_INTERVAL)
             continue
-    
-    # print(f"[ERROR] Không tìm thấy: {value}")
     return None
 
 def reload_if_ad_popup(driver, url="https://www.gmx.net/"):
-    """
-    Logic quan trọng: Reload về trang chủ nếu gặp popup quảng cáo "Wir finanzieren uns".
-    """
     try:
         try:
             current_url = driver.current_url
         except Exception:
             current_url = ""
 
-        # Logic 1: URL redirect
         if current_url.startswith("https://suche.gmx.net/web"):
             driver.get(url)
             time.sleep(2)
             return True
 
-        # Logic 2: Check elements
-        # Fast check by Title/Button text
         page_source = ""
         try:
             page_source = driver.page_source.lower()
@@ -198,15 +229,11 @@ def reload_if_ad_popup(driver, url="https://www.gmx.net/"):
             pass
 
         if "wir finanzieren uns" in page_source:
-            # Check kỹ hơn để tránh false positive
             popup_hints = [
-                "werbung",
-                "akzeptieren und weiter",
-                "zum abo ohne fremdwerbung",
-                "postfach ohne fremdwerbebanner",
+                "werbung", "akzeptieren und weiter", "zum abo ohne fremdwerbung", "postfach ohne fremdwerbebanner",
             ]
             if any(hint in page_source for hint in popup_hints):
-                print(">> [CORE] Phát hiện Popup Quảng cáo -> Reload GMX.")
+                # print(">> [CORE] Phát hiện Popup Quảng cáo -> Reload GMX.")
                 driver.get(url)
                 time.sleep(2)
                 return True
@@ -215,7 +242,6 @@ def reload_if_ad_popup(driver, url="https://www.gmx.net/"):
         pass
     return False
 
-# --- CÁC HÀM TIỆN ÍCH TỪ CONFIG_UTILS (MỚI THÊM) ---
 def wait_element(driver, by, value, timeout=10, visible=True):
     end_time = time.time() + timeout
     while time.time() < end_time:
